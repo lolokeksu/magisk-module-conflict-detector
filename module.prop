@@ -1,0 +1,6 @@
+id=ModuleConflictDetector
+name=Module Conflict Detector
+version=v1.0
+versionCode=100
+author=ExchNow (by Lolokeksu)
+description=Обнаружение конфликтов файлов между установленными Magisk/KSU/APatch модулями. CLI: mcd-ctrl
