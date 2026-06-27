@@ -1,112 +1,94 @@
 # Module Conflict Detector
 
-![Version](https://img.shields.io/badge/version-v1.0-blue)
-![Platform](https://img.shields.io/badge/platform-Magisk%20%7C%20KSU%20%7C%20APatch-orange)
-![Android](https://img.shields.io/badge/android-8.0%2B-green)
-![License](https://img.shields.io/badge/license-GPL--3.0-red)
+Magisk / KernelSU / APatch module that detects likely overlay conflicts between installed root modules.
 
-Magisk/KSU/APatch module that detects file overlay conflicts between installed modules.
+The public module identity is intentionally preserved for GitHub and 4PDA compatibility:
 
----
+```text
+id=ModuleConflictDetector
+name=Module Conflict Detector
+```
 
 ## Problem
 
-When multiple modules are active, each mounts a file overlay via magic mount. If two modules replace the **same system file**, the last one alphabetically wins — silently. No warning is shown.
+When several modules mount or replace the same system path, the effective result can depend on module order and implementation details. This can silently break fonts, spoofing modules, framework patches, system apps, native libraries, init scripts, permissions XML, or other overlays.
 
-**Common conflict scenarios:**
-- Two modules both modify `build.prop`
-- Two font mods replace the same `.ttf` files
-- A performance tweaker and another module both target the same sysfs node
-- Two hide/spoof modules overwrite the same system library
-
----
+Module Conflict Detector performs a read-only scan of installed active modules and reports suspicious collisions before the user starts disabling modules blindly.
 
 ## Features
 
-- Scans all active modules and their `/system` overlays
-- Detects files claimed by more than one module
-- Identifies the winning module (alphabetical order = last wins)
-- Classifies conflicts by severity: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`
-- Human-readable log + machine-readable JSON report
-- Auto-scan on every boot (non-blocking, runs in background)
-- CLI control via `mcd-ctrl`
+- Scans active modules in `/data/adb/modules`.
+- Detects same-path collisions across module overlays.
+- Detects file, symlink and character-device/whiteout path collisions.
+- Detects `.replace` directory collisions.
+- Detects `.replace` directories that mask files from another module.
+- Detects likely `system.prop` key collisions.
+- Classifies findings by severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`.
+- Generates human-readable and JSON reports.
+- Supports whitelist entries for accepted conflicts.
+- Provides optional auto-scan after boot.
+- Provides `action.sh` support for module managers.
 
----
+## Safety
 
-## Requirements
-
-- Android 8.0+
-- Magisk 20.4+ / KernelSU / APatch
-- BusyBox (bundled with Magisk)
-
----
+The scan is read-only. It does not mount, unmount, edit system properties, modify SELinux policy, touch kernel settings, tune thermal nodes, or change installed modules.
 
 ## Installation
 
-1. Download the latest `.zip` from [Releases](../../releases)
-2. Flash via Magisk / KSU / APatch
-3. Reboot
-4. First scan runs automatically ~30 seconds after boot
+1. Flash `ModuleConflictDetector-v1.2.zip` in Magisk, KernelSU, APatch, or a compatible module manager.
+2. Reboot.
+3. Run a manual scan or use the module action button.
 
----
-
-## Usage
+## Commands
 
 ```sh
-# Run via Termux or any root terminal:
-su -c mcd-ctrl scan          # scan for conflicts
-su -c mcd-ctrl report        # human-readable report
-su -c mcd-ctrl report --json # JSON report
-su -c mcd-ctrl clear         # clear logs
+su -c mcd-ctrl scan
+su -c mcd-ctrl scan --quiet
+su -c mcd-ctrl report
+su -c mcd-ctrl report --json
+su -c mcd-ctrl doctor
+su -c mcd-ctrl clear
 ```
 
----
+Whitelist:
 
-## Severity Levels
-
-| Level | Paths |
-|---|---|
-| `CRITICAL` | `/bin`, `/xbin`, `sepolicy`, `init` scripts |
-| `HIGH` | `build.prop`, `/framework`, `/lib`, `/lib64` |
-| `MEDIUM` | `/fonts`, `/media`, `/etc` |
-| `LOW` | Everything else |
-
----
-
-## Output Files
-
-| File | Description |
-|---|---|
-| `/data/adb/mcd/conflicts.log` | Human-readable conflict report |
-| `/data/adb/mcd/report.json` | JSON report for scripting |
-
-### Example `report.json`
-
-```json
-{
-  "scan_time": "2026-06-09T14:32:00",
-  "modules_scanned": 6,
-  "files_scanned": 843,
-  "conflicts_count": 2,
-  "conflicts": [
-    {
-      "path": "/system/build.prop",
-      "modules": ["BootIntegrityMask", "PlayIntegrityFix"],
-      "winner": "PlayIntegrityFix",
-      "severity": "HIGH"
-    }
-  ]
-}
+```sh
+su -c 'mcd-ctrl whitelist add /system/bin/example'
+su -c 'mcd-ctrl whitelist remove /system/bin/example'
+su -c 'mcd-ctrl whitelist list'
 ```
 
----
+Config:
 
-## Author
+```sh
+su -c 'mcd-ctrl config list'
+su -c 'mcd-ctrl config set auto_scan 0'
+su -c 'mcd-ctrl config set auto_scan 1'
+su -c 'mcd-ctrl config set boot_delay_seconds 45'
+```
 
-**ExchNow (by Lolokeksu)** — [4PDA](https://4pda.to/forum/index.php?showtopic=915158&view=findpost&p=143786143)
+## Output files
 
----
+```text
+/data/adb/mcd/conflicts.log
+/data/adb/mcd/report.json
+/data/adb/mcd/config.conf
+/data/adb/mcd/whitelist.conf
+```
+
+## Severity guide
+
+| Severity | Typical paths |
+|---|---|
+| `CRITICAL` | `/system/bin`, `/system/xbin`, `init`, `sepolicy`, permissions, sysconfig |
+| `HIGH` | `build.prop`, framework, app, priv-app, native libraries |
+| `MEDIUM` | fonts, media, general `/etc` resources |
+| `LOW` | other overlay paths |
+
+## Notes
+
+This module reports likely conflicts. It cannot prove runtime behavior for every root implementation because Magisk, KernelSU and APatch can differ in overlay and replace semantics.
 
 ## License
 
-[GPL-3.0](LICENSE)
+GPL-3.0
