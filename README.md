@@ -1,94 +1,97 @@
-# Module Conflict Detector
+# Module Conflict Detector v1.3
 
-Magisk / KernelSU / APatch module that detects likely overlay conflicts between installed root modules.
+Read-only diagnostic module for Magisk-compatible, KernelSU-family and APatch module systems. It finds collisions between active root modules without modifying modules, mounts, properties, sysfs or SELinux policy.
 
-The public module identity is intentionally preserved for GitHub and 4PDA compatibility:
+## Supported root-manager families
 
-```text
-id=ModuleConflictDetector
-name=Module Conflict Detector
-```
+- Magisk and managers exposing a Magisk-compatible `su`/module environment.
+- KernelSU, KernelSU Next, SukiSU Ultra, ReSukiSU and other `ksud`-compatible forks.
+- APatch and managers exposing an APatch-compatible `apd` environment.
 
-## Problem
+The module directory remains `/data/adb/modules`, which is shared by these module systems.
 
-When several modules mount or replace the same system path, the effective result can depend on module order and implementation details. This can silently break fonts, spoofing modules, framework patches, system apps, native libraries, init scripts, permissions XML, or other overlays.
+## Root-manager detection
 
-Module Conflict Detector performs a read-only scan of installed active modules and reports suspicious collisions before the user starts disabling modules blindly.
+Detection is evidence-ranked to prevent stale directories from producing false combinations:
 
-## Features
+1. Current `su -v` or `su --version` provider signature.
+2. Exact active daemon: `magiskd`, `ksud` or `apd`.
+3. Executable manager-owned core binary.
+4. Unique directory layout as a low-confidence fallback only.
 
-- Scans active modules in `/data/adb/modules`.
-- Detects same-path collisions across module overlays.
-- Detects file, symlink and character-device/whiteout path collisions.
-- Detects `.replace` directory collisions.
-- Detects `.replace` directories that mask files from another module.
-- Detects likely `system.prop` key collisions.
-- Classifies findings by severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`.
-- Generates human-readable and JSON reports.
-- Supports whitelist entries for accepted conflicts.
-- Provides optional auto-scan after boot.
-- Provides `action.sh` support for module managers.
+A retained `/data/adb/magisk`, `/data/adb/ksu` or `/data/adb/ap` directory alone never overrides stronger evidence. Ambiguous leftovers are reported as `unknown`, not as multiple simultaneously active managers.
 
-## Safety
+`mcd-ctrl doctor` and `report.json` include:
 
-The scan is read-only. It does not mount, unmount, edit system properties, modify SELinux policy, touch kernel settings, tune thermal nodes, or change installed modules.
+- `root_manager`
+- `root_manager_family`
+- `root_detection_method`
+- `root_detection_confidence`
+- `root_detection_evidence`
+
+## Conflict-analysis capabilities
+
+- Canonical path collision detection across `system`, `vendor`, `product`, `system_ext`, `odm` and `*_dlkm` overlays.
+- SHA-256 comparison: different content is actionable; identical duplicates are informational.
+- Live winner resolution by matching the mounted file, current property or current sysfs value to module candidates.
+- Explicit lexical fallback when an effective owner cannot be proven.
+- `.replace` collision and tree-masking analysis.
+- Module-local `overlay.d` analysis and global `/data/adb/overlay.d` inventory.
+- `system.prop` key and value comparison.
+- Runtime-script analysis for `service.sh`, `post-fs-data.sh`, `boot-completed.sh` and `action.sh`.
+- Detection of conflicting property, settings, device_config, sysctl, sysfs, mount, file-operation, permission and live-sepolicy actions.
+- Exact known-pair database, whitelist, snapshots and stale-lock recovery.
 
 ## Installation
 
-1. Flash `ModuleConflictDetector-v1.2.zip` in Magisk, KernelSU, APatch, or a compatible module manager.
-2. Reboot.
-3. Run a manual scan or use the module action button.
+1. Download `ModuleConflictDetector-v1.3.zip` from the GitHub release.
+2. Install it in Magisk, KernelSU-family or APatch manager.
+3. Reboot.
+4. Verify with `su -c 'mcd-ctrl doctor'`.
 
 ## Commands
 
 ```sh
-su -c mcd-ctrl scan
-su -c mcd-ctrl scan --quiet
-su -c mcd-ctrl report
-su -c mcd-ctrl report --json
-su -c mcd-ctrl doctor
-su -c mcd-ctrl clear
-```
+su -c 'mcd-ctrl version'
+su -c 'mcd-ctrl doctor'
+su -c 'mcd-ctrl boot-status'
+su -c 'mcd-ctrl scan --deep'
+su -c 'mcd-ctrl report'
+su -c 'mcd-ctrl report --json'
+su -c 'mcd-ctrl report --critical-only'
 
-Whitelist:
+su -c 'mcd-ctrl snapshot create before-install'
+su -c 'mcd-ctrl snapshot compare before-install'
+su -c 'mcd-ctrl snapshot list'
+su -c 'mcd-ctrl snapshot delete before-install'
 
-```sh
 su -c 'mcd-ctrl whitelist add /system/bin/example'
-su -c 'mcd-ctrl whitelist remove /system/bin/example'
+su -c 'mcd-ctrl whitelist add system.prop:debug.hwui.renderer'
+su -c 'mcd-ctrl whitelist add script:prop:debug.hwui.renderer'
 su -c 'mcd-ctrl whitelist list'
-```
 
-Config:
-
-```sh
 su -c 'mcd-ctrl config list'
 su -c 'mcd-ctrl config set auto_scan 0'
-su -c 'mcd-ctrl config set auto_scan 1'
-su -c 'mcd-ctrl config set boot_delay_seconds 45'
+su -c 'mcd-ctrl clear'
 ```
 
-## Output files
+## Automatic boot scan
 
-```text
-/data/adb/mcd/conflicts.log
-/data/adb/mcd/report.json
-/data/adb/mcd/config.conf
-/data/adb/mcd/whitelist.conf
-```
+- Magisk-compatible managers use the non-backgrounded `service.sh` fallback.
+- KernelSU-family and APatch managers can use the native `boot-completed.sh` hook.
+- Both lifecycle paths call one shared launcher with a per-boot ID and process lock, so only one scan is written per boot.
+- Status: `/data/adb/mcd/boot-scan.status`.
+- Diagnostic log: `/data/adb/mcd/boot-scan.log`.
+- A successful automatic report contains `"boot_scan": true`.
 
-## Severity guide
+## Reports
 
-| Severity | Typical paths |
-|---|---|
-| `CRITICAL` | `/system/bin`, `/system/xbin`, `init`, `sepolicy`, permissions, sysconfig |
-| `HIGH` | `build.prop`, framework, app, priv-app, native libraries |
-| `MEDIUM` | fonts, media, general `/etc` resources |
-| `LOW` | other overlay paths |
+- `/data/adb/mcd/conflicts.log`
+- `/data/adb/mcd/report.json`
+- `/data/adb/mcd/reports/conflicts-latest.log`
+- `/data/adb/mcd/reports/report-latest.json`
+- `/data/adb/mcd/snapshots/*.tsv`
 
-## Notes
+## Safety
 
-This module reports likely conflicts. It cannot prove runtime behavior for every root implementation because Magisk, KernelSU and APatch can differ in overlay and replace semantics.
-
-## License
-
-GPL-3.0
+The scanner is read-only. It does not mount or unmount filesystems, change properties, write sysfs, modify SELinux policy or disable modules.
