@@ -18,12 +18,29 @@ on:
       - CHANGELOG.md
       - update.json
       - .github/workflows/release.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - module.prop
+      - bin/**
+      - system/**
+      - config/**
+      - customize.sh
+      - service.sh
+      - boot-completed.sh
+      - action.sh
+      - uninstall.sh
+      - README.md
+      - CHANGELOG.md
+      - update.json
+      - .github/workflows/release.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: module-release
+  group: module-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -86,7 +103,18 @@ jobs:
           unzip -t "$zip_name"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
 
+      - name: Upload temporary build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-v1.3-build
+          path: |
+            ${{ steps.package.outputs.zip_name }}
+            ${{ steps.package.outputs.zip_name }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Prepare release notes
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -99,6 +127,7 @@ jobs:
           test -s release-notes.md
 
       - name: Create or update GitHub release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
