@@ -1,0 +1,149 @@
+#!/system/bin/sh
+# Universal one-shot boot scanner for Magisk, KernelSU-family and APatch.
+
+TRIGGER=${1:-service}
+SELF_DIR=${0%/*}
+MODDIR=${SELF_DIR%/bin}
+MCD_BIN=${MCD_BOOT_BIN:-$MODDIR/bin/mcd-ctrl}
+MCD_DIR=${MCD_DIR:-/data/adb/mcd}
+CONFIG_FILE="$MCD_DIR/config.conf"
+BOOT_LOG="$MCD_DIR/boot-scan.log"
+BOOT_STATUS_FILE="$MCD_DIR/boot-scan.status"
+LAST_BOOT_ID_FILE="$MCD_DIR/last-boot-scan.id"
+TRIGGER_LOCK="$MCD_DIR/.boot-trigger.lock"
+BOOT_ID_FILE=${MCD_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
+
+mkdir -p "$MCD_DIR" 2>/dev/null || exit 1
+umask 022
+
+now() {
+    date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo unknown
+}
+
+log() {
+    printf '[%s] %s\n' "$(now)" "$*" >> "$BOOT_LOG"
+}
+
+get_conf() {
+    key="$1"
+    def="$2"
+    val=""
+    if [ -f "$CONFIG_FILE" ]; then
+        val=$(grep -E "^[[:space:]]*$key=" "$CONFIG_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2-)
+    fi
+    [ -n "$val" ] && printf '%s' "$val" || printf '%s' "$def"
+}
+
+get_prop() {
+    if [ -n "${MCD_GETPROP_BIN:-}" ] && [ -x "$MCD_GETPROP_BIN" ]; then
+        "$MCD_GETPROP_BIN" "$1" 2>/dev/null
+    else
+        getprop "$1" 2>/dev/null
+    fi
+}
+
+write_status() {
+    status="$1"
+    exit_code="$2"
+    boot_id="$3"
+    cat > "$BOOT_STATUS_FILE.tmp" <<STATUS
+boot_scan_status=$status
+boot_scan_time=$(now)
+boot_scan_trigger=$TRIGGER
+boot_scan_boot_id=$boot_id
+boot_scan_exit_code=$exit_code
+STATUS
+    mv -f "$BOOT_STATUS_FILE.tmp" "$BOOT_STATUS_FILE" 2>/dev/null || true
+}
+
+# APatch/KernelSU boot-completed.sh is already late enough. Magisk service.sh
+# must wait for Android boot completion because Magisk has no module-level
+# boot-completed.sh lifecycle hook.
+if [ "$TRIGGER" = "service" ]; then
+    wait_count=0
+    while [ "$(get_prop sys.boot_completed)" != "1" ]; do
+        sleep 5
+        wait_count=$((wait_count + 1))
+        if [ "$wait_count" -ge 240 ]; then
+            log "trigger=$TRIGGER status=timeout waiting_for=sys.boot_completed"
+            write_status timeout 124 unknown
+            exit 124
+        fi
+    done
+fi
+
+if [ "$(get_conf auto_scan 1)" != "1" ]; then
+    log "trigger=$TRIGGER status=disabled"
+    write_status disabled 0 unknown
+    exit 0
+fi
+
+delay=$(get_conf boot_delay_seconds 30)
+case "$delay" in
+    ''|*[!0-9]*) delay=30 ;;
+esac
+[ "$delay" -gt 0 ] && sleep "$delay"
+
+boot_id=$(cat "$BOOT_ID_FILE" 2>/dev/null | tr -d '\r\n ')
+[ -n "$boot_id" ] || boot_id="unknown-$(cut -d. -f1 /proc/uptime 2>/dev/null)-$$"
+
+if [ -f "$LAST_BOOT_ID_FILE" ] && [ "$(cat "$LAST_BOOT_ID_FILE" 2>/dev/null)" = "$boot_id" ]; then
+    log "trigger=$TRIGGER status=already_completed boot_id=$boot_id"
+    exit 0
+fi
+
+acquire_trigger_lock() {
+    attempts=0
+    while ! mkdir "$TRIGGER_LOCK" 2>/dev/null; do
+        holder_pid=$(cat "$TRIGGER_LOCK/pid" 2>/dev/null)
+        holder_boot=$(cat "$TRIGGER_LOCK/boot_id" 2>/dev/null)
+
+        if [ -n "$holder_pid" ] && [ "$holder_boot" = "$boot_id" ] && kill -0 "$holder_pid" 2>/dev/null; then
+            log "trigger=$TRIGGER status=duplicate_suppressed holder_pid=$holder_pid boot_id=$boot_id"
+            return 1
+        fi
+
+        rm -rf "$TRIGGER_LOCK" 2>/dev/null
+        attempts=$((attempts + 1))
+        [ "$attempts" -ge 3 ] && return 1
+        sleep 1
+    done
+
+    printf '%s\n' "$$" > "$TRIGGER_LOCK/pid"
+    printf '%s\n' "$boot_id" > "$TRIGGER_LOCK/boot_id"
+    return 0
+}
+
+acquire_trigger_lock || exit 0
+cleanup_trigger_lock() {
+    rm -rf "$TRIGGER_LOCK" 2>/dev/null
+}
+trap 'cleanup_trigger_lock' EXIT HUP INT TERM
+
+if [ -f "$LAST_BOOT_ID_FILE" ] && [ "$(cat "$LAST_BOOT_ID_FILE" 2>/dev/null)" = "$boot_id" ]; then
+    log "trigger=$TRIGGER status=already_completed_after_lock boot_id=$boot_id"
+    exit 0
+fi
+
+if [ ! -x "$MCD_BIN" ]; then
+    log "trigger=$TRIGGER status=missing_binary path=$MCD_BIN"
+    write_status missing_binary 127 "$boot_id"
+    exit 127
+fi
+
+write_status running 0 "$boot_id"
+log "trigger=$TRIGGER status=started boot_id=$boot_id binary=$MCD_BIN"
+
+"$MCD_BIN" scan --quiet --boot >> "$BOOT_LOG" 2>&1
+rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$boot_id" > "$LAST_BOOT_ID_FILE"
+    write_status success 0 "$boot_id"
+    log "trigger=$TRIGGER status=success boot_id=$boot_id"
+else
+    write_status failed "$rc" "$boot_id"
+    log "trigger=$TRIGGER status=failed exit_code=$rc boot_id=$boot_id"
+fi
+
+exit "$rc"

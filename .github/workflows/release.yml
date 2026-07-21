@@ -1,0 +1,118 @@
+name: Build and publish module release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - module.prop
+      - bin/**
+      - system/**
+      - config/**
+      - customize.sh
+      - service.sh
+      - boot-completed.sh
+      - action.sh
+      - uninstall.sh
+      - README.md
+      - CHANGELOG.md
+      - update.json
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: module-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read module version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version=//p' module.prop | head -n 1)"
+          version_code="$(sed -n 's/^versionCode=//p' module.prop | head -n 1)"
+          test -n "$version"
+          test -n "$version_code"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Validate module
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do sh -n "$file"; done
+          sh -n bin/mcd-boot-scan
+          sh -n customize.sh
+          sh -n service.sh
+          sh -n boot-completed.sh
+          sh -n action.sh
+          sh -n uninstall.sh
+          python -m json.tool update.json >/dev/null
+          test "$(sed -n 's/^version=//p' module.prop | head -n 1)" = "${{ steps.version.outputs.version }}"
+          test "$(python -c 'import json; print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
+
+      - name: Build flashable ZIP
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          zip_name="ModuleConflictDetector-${version}.zip"
+          rm -f "$zip_name" "$zip_name.sha256"
+          zip -r -9 "$zip_name" \
+            module.prop \
+            customize.sh \
+            service.sh \
+            boot-completed.sh \
+            action.sh \
+            uninstall.sh \
+            README.md \
+            CHANGELOG.md \
+            update.json \
+            bin \
+            system \
+            config
+          sha256sum "$zip_name" > "$zip_name.sha256"
+          unzip -t "$zip_name"
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          awk -v heading="## ${version}" '
+            index($0, heading) == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          zip_name="${{ steps.package.outputs.zip_name }}"
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" "$zip_name" "$zip_name.sha256" --clobber
+            gh release edit "$version" --title "$version" --notes-file release-notes.md --latest
+          else
+            gh release create "$version" "$zip_name" "$zip_name.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$version" \
+              --notes-file release-notes.md \
+              --latest
+          fi

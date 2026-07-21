@@ -1,5 +1,3 @@
 #!/system/bin/sh
-# Module Conflict Detector v1.2 - uninstall.sh
-# Full cleanup of runtime data and legacy v1.x external binary layout.
-
+# Remove runtime data created by Module Conflict Detector.
 rm -rf /data/adb/mcd
