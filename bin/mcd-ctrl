@@ -1,6 +1,42 @@
 #!/system/bin/sh
 # Module Conflict Detector v1.3 entry point.
 
+show_mobile_help() {
+    cat <<EOFHELP
+Module Conflict Detector $VERSION
+
+Команды:
+  scan          Проверка
+  report        Отчёт
+  boot-status   Автозапуск
+  doctor        Диагностика
+  snapshot      Снимки
+  whitelist     Исключения
+  config        Настройки
+  clear         Очистка
+  version       Версия
+
+Быстрый запуск:
+  mcd-ctrl scan --deep
+  mcd-ctrl report
+
+Только опасные:
+  mcd-ctrl report \
+    --critical-only
+
+JSON-отчёт:
+  mcd-ctrl report --json
+EOFHELP
+}
+
+case "$1" in
+    help|--help|-h|'')
+        VERSION="v1.3"
+        show_mobile_help
+        exit 0
+        ;;
+esac
+
 MCD_LIB_DIR="${MCD_LIB_DIR:-/data/adb/modules/ModuleConflictDetector/bin/lib}"
 if [ ! -d "$MCD_LIB_DIR" ]; then
     MCD_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
@@ -32,6 +68,10 @@ case "$1" in
     doctor) do_doctor ;;
     boot-status) do_boot_status ;;
     version|--version|-v) echo "Module Conflict Detector $VERSION ($VERSION_CODE)" ;;
-    help|--help|-h|'') show_help ;;
-    *) echo "! Unknown command: $1"; echo; show_help; exit 1 ;;
+    *)
+        echo "! Неизвестная команда: $1"
+        echo
+        show_mobile_help
+        exit 1
+        ;;
 esac
