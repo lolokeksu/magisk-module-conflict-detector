@@ -21,8 +21,7 @@ Module Conflict Detector $VERSION
   mcd-ctrl report
 
 Только опасные:
-  mcd-ctrl report \
-    --critical-only
+  mcd-ctrl report --critical-only
 
 JSON-отчёт:
   mcd-ctrl report --json
