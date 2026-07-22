@@ -1,0 +1,288 @@
+#!/system/bin/sh
+# Compact bilingual interactive menu for mobile terminals.
+
+MODDIR=${0%/*}
+MCD="$MODDIR/mcd-ctrl"
+MCD_DIR=${MCD_DIR:-/data/adb/mcd}
+LANG_FILE="$MCD_DIR/ui-language.conf"
+UI_LANG=ru
+
+load_language() {
+    [ -r "$LANG_FILE" ] || return 0
+    case "$(cat "$LANG_FILE" 2>/dev/null)" in
+        en) UI_LANG=en ;;
+        *) UI_LANG=ru ;;
+    esac
+}
+
+save_language() {
+    mkdir -p "$MCD_DIR" 2>/dev/null || return 0
+    printf '%s\n' "$UI_LANG" > "$LANG_FILE" 2>/dev/null || :
+}
+
+clear_screen() {
+    command -v clear >/dev/null 2>&1 && clear 2>/dev/null || :
+}
+
+pause_menu() {
+    printf '\n'
+    if [ "$UI_LANG" = "en" ]; then
+        printf 'Press Enter to continue: '
+    else
+        printf 'Enter - продолжить: '
+    fi
+    IFS= read -r _ || return 1
+}
+
+run_and_pause() {
+    printf '\n'
+    "$@"
+    pause_menu || exit 0
+}
+
+read_choice() {
+    if [ "$UI_LANG" = "en" ]; then
+        printf '\nSelect: '
+    else
+        printf '\nВыберите: '
+    fi
+    IFS= read -r MENU_CHOICE
+}
+
+show_main_menu() {
+    title=$(sh "$MCD" version 2>/dev/null)
+    [ -n "$title" ] || title="Module Conflict Detector"
+    printf '%s\n\n' "$title"
+    if [ "$UI_LANG" = "en" ]; then
+        cat <<'MENU'
+1. Quick scan
+2. Full scan
+3. Advanced menu
+4. Русский язык
+0. Exit
+MENU
+    else
+        cat <<'MENU'
+1. Быстрая проверка
+2. Полная проверка
+3. Расширенное меню
+4. English language
+0. Выход
+MENU
+    fi
+}
+
+show_advanced_menu() {
+    clear_screen
+    if [ "$UI_LANG" = "en" ]; then
+        cat <<'MENU'
+Advanced menu
+
+1. Last report
+2. Critical findings
+3. Explain finding
+4. Baseline
+5. Export diagnostics
+6. Boot scan status
+7. Module diagnostics
+8. Settings
+9. Self-test
+10. Whitelist
+11. Snapshots
+12. Technical help
+0. Back
+MENU
+    else
+        cat <<'MENU'
+Расширенное меню
+
+1. Последний отчёт
+2. Только опасные
+3. Объяснить находку
+4. Baseline
+5. Экспорт диагностики
+6. Статус автозапуска
+7. Диагностика модуля
+8. Настройки
+9. Самопроверка
+10. Исключения
+11. Снимки
+12. Техническая справка
+0. Назад
+MENU
+    fi
+}
+
+baseline_menu() {
+    clear_screen
+    if [ "$UI_LANG" = "en" ]; then
+        cat <<'MENU'
+Baseline
+
+1. Create
+2. Compare
+3. Show last difference
+4. Reset
+0. Back
+MENU
+    else
+        cat <<'MENU'
+Baseline
+
+1. Создать
+2. Сравнить
+3. Последняя разница
+4. Сбросить
+0. Назад
+MENU
+    fi
+    read_choice || return 1
+    case "$MENU_CHOICE" in
+        1) run_and_pause "$MCD" baseline create ;;
+        2) run_and_pause "$MCD" baseline compare ;;
+        3) run_and_pause "$MCD" baseline show ;;
+        4) run_and_pause "$MCD" baseline reset ;;
+        *) return 0 ;;
+    esac
+}
+
+whitelist_menu() {
+    clear_screen
+    if [ "$UI_LANG" = "en" ]; then
+        cat <<'MENU'
+Whitelist
+
+1. Show
+2. Add target
+3. Remove target
+0. Back
+MENU
+    else
+        cat <<'MENU'
+Исключения
+
+1. Показать
+2. Добавить цель
+3. Удалить цель
+0. Назад
+MENU
+    fi
+    read_choice || return 1
+    case "$MENU_CHOICE" in
+        1) run_and_pause "$MCD" whitelist list ;;
+        2)
+            [ "$UI_LANG" = "en" ] && printf 'Target: ' || printf 'Цель: '
+            IFS= read -r target || return 1
+            [ -n "$target" ] && run_and_pause "$MCD" whitelist add "$target"
+            ;;
+        3)
+            [ "$UI_LANG" = "en" ] && printf 'Target: ' || printf 'Цель: '
+            IFS= read -r target || return 1
+            [ -n "$target" ] && run_and_pause "$MCD" whitelist remove "$target"
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+snapshot_menu() {
+    clear_screen
+    if [ "$UI_LANG" = "en" ]; then
+        cat <<'MENU'
+Snapshots
+
+1. Create
+2. List
+3. Compare
+4. Delete
+0. Back
+MENU
+    else
+        cat <<'MENU'
+Снимки
+
+1. Создать
+2. Список
+3. Сравнить
+4. Удалить
+0. Назад
+MENU
+    fi
+    read_choice || return 1
+    case "$MENU_CHOICE" in
+        1)
+            [ "$UI_LANG" = "en" ] && printf 'Name (optional): ' || printf 'Имя (необязательно): '
+            IFS= read -r name || return 1
+            if [ -n "$name" ]; then run_and_pause "$MCD" snapshot create "$name"; else run_and_pause "$MCD" snapshot create; fi
+            ;;
+        2) run_and_pause "$MCD" snapshot list ;;
+        3)
+            [ "$UI_LANG" = "en" ] && printf 'Name: ' || printf 'Имя: '
+            IFS= read -r name || return 1
+            [ -n "$name" ] && run_and_pause "$MCD" snapshot compare "$name"
+            ;;
+        4)
+            [ "$UI_LANG" = "en" ] && printf 'Name: ' || printf 'Имя: '
+            IFS= read -r name || return 1
+            [ -n "$name" ] && run_and_pause "$MCD" snapshot delete "$name"
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+advanced_menu() {
+    while :; do
+        show_advanced_menu
+        read_choice || return 1
+        case "$MENU_CHOICE" in
+            1) run_and_pause "$MCD" report ;;
+            2) run_and_pause "$MCD" report --critical-only ;;
+            3)
+                printf 'ID (MCD-...): '
+                IFS= read -r id || return 1
+                [ -n "$id" ] && run_and_pause "$MCD" explain "$id"
+                ;;
+            4) baseline_menu || return 1 ;;
+            5) run_and_pause "$MCD" export --privacy ;;
+            6) run_and_pause "$MCD" boot-status ;;
+            7) run_and_pause "$MCD" doctor ;;
+            8) run_and_pause "$MCD" config list ;;
+            9) run_and_pause "$MCD" self-test ;;
+            10) whitelist_menu || return 1 ;;
+            11) snapshot_menu || return 1 ;;
+            12) run_and_pause "$MCD" help-all ;;
+            0) return 0 ;;
+            *)
+                [ "$UI_LANG" = "en" ] && echo 'Invalid option' || echo 'Неверный пункт'
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+load_language
+while :; do
+    clear_screen
+    show_main_menu
+    if ! read_choice; then
+        if [ "$UI_LANG" = "en" ]; then
+            echo 'Input unavailable. Starting full scan.'
+        else
+            echo 'Ввод недоступен. Запускаю проверку.'
+        fi
+        exec "$MCD" scan --deep
+    fi
+    case "$MENU_CHOICE" in
+        1) run_and_pause "$MCD" scan ;;
+        2) run_and_pause "$MCD" scan --deep ;;
+        3) advanced_menu || exit 0 ;;
+        4)
+            if [ "$UI_LANG" = "en" ]; then UI_LANG=ru; else UI_LANG=en; fi
+            save_language
+            ;;
+        0) exit 0 ;;
+        *)
+            [ "$UI_LANG" = "en" ] && echo 'Invalid option' || echo 'Неверный пункт'
+            sleep 1
+            ;;
+    esac
+done

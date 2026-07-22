@@ -1,9 +1,9 @@
 #!/system/bin/sh
-# Module Conflict Detector v1.3
+# Module Conflict Detector v1.4
 # Read-only conflict analysis for Magisk / KernelSU / APatch modules.
 
-VERSION="v1.3"
-VERSION_CODE="130"
+VERSION="v1.4"
+VERSION_CODE="140"
 SELF_ID="ModuleConflictDetector"
 
 MCD_DIR="${MCD_DIR:-/data/adb/mcd}"
@@ -24,8 +24,15 @@ LOCK_DIR="$MCD_DIR/.scan.lock"
 BOOT_STATUS_FILE="$MCD_DIR/boot-scan.status"
 BOOT_LOG_FILE="$MCD_DIR/boot-scan.log"
 LAST_BOOT_ID_FILE="$MCD_DIR/last-boot-scan.id"
+FINDINGS_INDEX_FILE="$MCD_DIR/findings.tsv"
+MODULE_STATUS_REPORT="$MCD_DIR/module-status.tsv"
+SCAN_MANIFEST_FILE="$MCD_DIR/scan-manifest.tsv"
+BASELINE_FILE="$MCD_DIR/baseline.tsv"
+BASELINE_DIFF_FILE="$MCD_DIR/baseline-diff.txt"
+EXPORT_FALLBACK_DIR="$MCD_DIR/exports"
 
 MODULE_FILE="$TMP_DIR/modules.tsv"
+MODULE_STATUS_FILE="$TMP_DIR/module-status.tsv"
 ENTRY_FILE="$TMP_DIR/entries.tsv"
 REPLACE_FILE="$TMP_DIR/replace.tsv"
 PROP_FILE="$TMP_DIR/properties.tsv"
@@ -65,7 +72,7 @@ msg() {
 
 write_default_config() {
     cat > "$CONFIG_FILE" <<'CFG'
-# Module Conflict Detector v1.3 configuration
+# Module Conflict Detector v1.4 configuration
 # 1 = scan after boot, 0 = manual scan only
 auto_scan=1
 
@@ -86,22 +93,23 @@ hash_conflicts=1
 
 # Check exact module pairs listed in known-conflicts.conf
 known_conflicts=1
+
+# Compare the current scan with an existing baseline after every scan
+baseline_compare_on_scan=1
 CFG
 }
 
 write_default_known_db() {
     cat > "$KNOWN_FILE" <<'DB'
-# Exact known-conflict database.
-# Format:
-# module_id_a|module_id_b|SEVERITY|reason
-#
-# Keep entries evidence-based. Examples are intentionally commented out:
-# ModuleA|ModuleB|HIGH|Both modules manage the same subsystem.
+# database_version=2
+# TSV columns:
+# rule_id module_a module_b min_a max_a min_b max_b root_family sdk_min sdk_max severity category reason source added
+# Use * for unrestricted fields. Add only verified rules.
+# KC001	ModuleA	ModuleB	*	*	*	*	*	*	*	HIGH	subsystem	Both modules control the same subsystem.	manual	2026-07-22
 DB
 }
-
 ensure_dirs() {
-    mkdir -p "$MCD_DIR" "$REPORTS_DIR" "$SNAPSHOTS_DIR" "$TMP_DIR" 2>/dev/null
+    mkdir -p "$MCD_DIR" "$REPORTS_DIR" "$SNAPSHOTS_DIR" "$TMP_DIR" "$EXPORT_FALLBACK_DIR" 2>/dev/null
     [ -f "$CONFIG_FILE" ] || write_default_config
     [ -f "$WHITELIST_FILE" ] || : > "$WHITELIST_FILE"
     [ -f "$KNOWN_FILE" ] || write_default_known_db
@@ -138,6 +146,111 @@ owners_to_json() {
         fi
     done
     printf '%s' "$out"
+}
+
+
+safe_field() {
+    printf '%s' "$1" | tr '\t\r\n' '   '
+}
+
+hash_text() {
+    text="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$text" | sha256sum 2>/dev/null | awk '{print $1}'
+        return
+    fi
+    for bb in busybox /data/adb/magisk/busybox /data/adb/ap/bin/busybox /data/adb/ksu/bin/busybox; do
+        [ "$bb" = busybox ] || [ -x "$bb" ] || continue
+        hash=$(printf '%s' "$text" | "$bb" sha256sum 2>/dev/null | awk '{print $1}')
+        [ -n "$hash" ] && { printf '%s' "$hash"; return; }
+    done
+    if command -v cksum >/dev/null 2>&1; then
+        printf '%s' "$text" | cksum 2>/dev/null | awk '{printf "%08x%08x", $1, $2}'
+    else
+        printf '%s' "$text" | awk '{s=0;for(i=1;i<=length($0);i++)s=(s*33+i)%2147483647}END{printf "%012x",s}'
+    fi
+}
+
+csv_to_json_array() {
+    csv="$1"; out=""
+    oldifs=$IFS; IFS=','
+    for item in $csv; do
+        esc=$(json_escape "$item")
+        [ -n "$out" ] && out="$out,\"$esc\"" || out="\"$esc\""
+    done
+    IFS=$oldifs
+    printf '[%s]' "$out"
+}
+
+finding_id_for() {
+    type="$1"; target="$2"; owners="$3"
+    normalized_owners=$(printf '%s\n' $owners | LC_ALL=C sort 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+    digest=$(hash_text "$type|$target|$normalized_owners")
+    digest=$(printf '%s' "$digest" | tr 'a-f' 'A-F' | cut -c1-12)
+    [ -n "$digest" ] || digest="000000000000"
+    printf 'MCD-%s' "$digest"
+}
+
+finding_actionability() {
+    severity="$1"; conflict="$2"
+    [ "$conflict" = "1" ] || { printf 'informational'; return; }
+    case "$severity" in CRITICAL|HIGH) printf 'immediate' ;; *) printf 'review' ;; esac
+}
+
+finding_reason_codes() {
+    type="$1"; severity="$2"; method="$3"; target="$4"; codes="$type"
+    case "$severity" in CRITICAL) codes="$codes,critical_target" ;; HIGH) codes="$codes,high_risk_target" ;; esac
+    case "$method" in
+        live_*|current_*_match) codes="$codes,live_winner_confirmed" ;;
+        explicit_module_priority|*explicit_priority*) codes="$codes,explicit_priority" ;;
+        *heuristic*) codes="$codes,heuristic_winner" ;;
+        unresolved|runtime_order_unresolved) codes="$codes,winner_unresolved" ;;
+    esac
+    case "$target" in /system/bin/*|/system/xbin/*|*sepolicy*|/overlay.d/*) codes="$codes,boot_or_core_path" ;; esac
+    printf '%s' "$codes"
+}
+
+finding_recommendation() {
+    type="$1"; conflict="$3"; method="$4"
+    [ "$conflict" = "1" ] || { printf 'Действия не требуются. Это информационная находка.'; return; }
+    case "$type" in
+        known_module_pair) rec='Проверьте правило базы и не используйте эту пару одновременно без подтверждённой совместимости.' ;;
+        property_value_conflict|script_resource_conflict) rec='Сравните назначение модулей и временно отключите один из них. Автоматический безопасный выбор не определён.' ;;
+        replace_dir_collision|replace_masks_tree) rec='Проверьте перекрываемое дерево. Одновременное использование может скрывать файлы другого модуля.' ;;
+        *) rec='Временно отключите один из конфликтующих модулей и повторите сканирование. Автоматический безопасный выбор не определён.' ;;
+    esac
+    case "$method" in *heuristic*|unresolved|runtime_order_unresolved) rec="$rec Победитель указан только как эвристика либо не определён." ;; esac
+    printf '%s' "$rec"
+}
+
+finding_impact() {
+    target="$2"; severity="$3"
+    case "$target" in
+        /system/bin/*|/system/xbin/*|*sepolicy*|/overlay.d/*) printf 'Возможны сбой загрузки, системных служб или политик SELinux.' ;;
+        */framework/*|*/lib/*|*/lib64/*) printf 'Возможны сбои приложений, framework или native-библиотек.' ;;
+        system.prop:*|prop:*) printf 'Возможны изменения поведения Android, графики, производительности или совместимости.' ;;
+        sysfs:*|sysctl:*) printf 'Возможны изменения производительности, нагрева, питания или стабильности.' ;;
+        *) case "$severity" in CRITICAL|HIGH) printf 'Конфликт может заметно влиять на работу системы или модуля.' ;; *) printf 'Влияние зависит от назначения конфликтующих модулей.' ;; esac ;;
+    esac
+}
+
+module_priority_value() {
+    module="$1"; dir="$MODULES_DIR/$module"; value=""
+    [ -f "$dir/priority" ] && value=$(head -n 1 "$dir/priority" 2>/dev/null | tr -d ' \r\n')
+    [ -n "$value" ] || value=$(module_prop_value "$dir/module.prop" priority)
+    printf '%s' "$value" | grep -Eq '^-?[0-9]+$' || return 1
+    printf '%s' "$value"
+}
+
+precedence_winner() {
+    owners="$1"; best=""; best_value=""; tie=0
+    for module in $owners; do
+        value=$(module_priority_value "$module") || continue
+        if [ -z "$best" ] || [ "$value" -gt "$best_value" ]; then best="$module"; best_value="$value"; tie=0
+        elif [ "$value" -eq "$best_value" ]; then tie=1; fi
+    done
+    [ -n "$best" ] && [ "$tie" = "0" ] || return 1
+    printf '%s' "$best"
 }
 
 count_init() {
@@ -208,7 +321,7 @@ in_whitelist() {
 }
 
 cleanup_scan_temp() {
-    rm -f "$MODULE_FILE" "$ENTRY_FILE" "$REPLACE_FILE" "$PROP_FILE" "$SCRIPT_FILE" \
+    rm -f "$MODULE_FILE" "$MODULE_STATUS_FILE" "$ENTRY_FILE" "$REPLACE_FILE" "$PROP_FILE" "$SCRIPT_FILE" \
         "$PATH_GROUP_FILE" "$REPLACE_GROUP_FILE" "$REPLACE_MASK_FILE" \
         "$PROP_GROUP_FILE" "$SCRIPT_GROUP_FILE" "$JSON_ITEMS_FILE" \
         "$COUNT_FINDINGS_FILE" "$COUNT_CONFLICTS_FILE" "$COUNT_CRITICAL_FILE" \
@@ -254,4 +367,3 @@ ROOT_MANAGER_FAMILY="unknown"
 ROOT_DETECTION_METHOD="none"
 ROOT_DETECTION_CONFIDENCE="low"
 ROOT_DETECTION_EVIDENCE="no manager-specific runtime evidence"
-

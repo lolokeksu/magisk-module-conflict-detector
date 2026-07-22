@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4 - 22.07.2026
+
+- Default `mcd-ctrl` now opens a compact bilingual Russian/English menu with three primary actions and a separate advanced mode.
+- Added a compact interactive mobile menu for module action and `mcd-ctrl menu`.
+- Added stable finding IDs and `mcd-ctrl explain ID` with risk, impact and recommendation.
+- Added confidence, actionability and reason codes to text and JSON findings.
+- Added explicit module-priority winner resolution before low-confidence lexical fallback.
+- Added active, disabled, pending-removal and `skip_mount` module inventory.
+- Added baseline create/compare/reset and automatic post-scan baseline diff.
+- Added privacy-aware diagnostic export with ZIP and safe tar.gz fallback.
+- Added a versioned TSV known-conflict database with version, root-family and SDK constraints.
+- Added `mcd-ctrl self-test` and isolated `--full` conflict fixtures.
+- Added compact and full help modes suitable for narrow Android terminals.
+
 ## v1.3 - 21.07.2026
 
 - Replaced the v1.2 scanner core with a value-aware and content-aware engine.
