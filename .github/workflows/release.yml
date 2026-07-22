@@ -9,6 +9,7 @@ on:
       - bin/**
       - system/**
       - config/**
+      - tests/**
       - customize.sh
       - service.sh
       - boot-completed.sh
@@ -18,35 +19,28 @@ on:
       - CHANGELOG.md
       - update.json
       - .github/workflows/release.yml
+  pull_request:
+    paths:
+      - module.prop
+      - bin/**
+      - tests/**
+      - customize.sh
+      - update.json
+      - .github/workflows/release.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: module-release
+  group: module-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Read module version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(sed -n 's/^version=//p' module.prop | head -n 1)"
-          version_code="$(sed -n 's/^versionCode=//p' module.prop | head -n 1)"
-          test -n "$version"
-          test -n "$version_code"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
-
-      - name: Validate module
-        shell: bash
+      - uses: actions/checkout@v4
+      - name: Validate shell and metadata
         run: |
           set -euo pipefail
           sh -n bin/mcd-ctrl
@@ -57,62 +51,66 @@ jobs:
           sh -n boot-completed.sh
           sh -n action.sh
           sh -n uninstall.sh
+          busybox ash -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do busybox ash -n "$file"; done
           python -m json.tool update.json >/dev/null
-          test "$(sed -n 's/^version=//p' module.prop | head -n 1)" = "${{ steps.version.outputs.version }}"
-          test "$(python -c 'import json; print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
+          test "$(sed -n 's/^version=//p' module.prop | head -n1)" = "$(python -c 'import json;print(json.load(open("update.json"))["version"])')"
+          test "$(sed -n 's/^versionCode=//p' module.prop | head -n1)" = "$(python -c 'import json;print(json.load(open("update.json"))["versionCode"])')"
+      - name: Run v1.4 regression tests
+        run: bash tests/test-v14-layer.sh
+      - name: Build validation ZIP
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version=//p' module.prop | head -n1)"
+          zip_name="ModuleConflictDetector-${version}.zip"
+          zip -r -9 "$zip_name" \
+            module.prop customize.sh service.sh boot-completed.sh action.sh uninstall.sh \
+            README.md CHANGELOG.md update.json bin system config
+          sha256sum "$zip_name" > "$zip_name.sha256"
+          unzip -t "$zip_name"
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModuleConflictDetector-v1.4-validation
+          path: |
+            ModuleConflictDetector-v1.4.zip
+            ModuleConflictDetector-v1.4.zip.sha256
+          if-no-files-found: error
 
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read module version
+        id: version
+        run: |
+          version="$(sed -n 's/^version=//p' module.prop | head -n1)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Build flashable ZIP
         id: package
-        shell: bash
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           zip_name="ModuleConflictDetector-${version}.zip"
-          rm -f "$zip_name" "$zip_name.sha256"
           zip -r -9 "$zip_name" \
-            module.prop \
-            customize.sh \
-            service.sh \
-            boot-completed.sh \
-            action.sh \
-            uninstall.sh \
-            README.md \
-            CHANGELOG.md \
-            update.json \
-            bin \
-            system \
-            config
+            module.prop customize.sh service.sh boot-completed.sh action.sh uninstall.sh \
+            README.md CHANGELOG.md update.json bin system config
           sha256sum "$zip_name" > "$zip_name.sha256"
           unzip -t "$zip_name"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release notes
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          awk -v heading="## ${version}" '
-            index($0, heading) == 1 { found=1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-          test -s release-notes.md
-
-      - name: Create or update GitHub release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           zip_name="${{ steps.package.outputs.zip_name }}"
+          awk -v heading="## ${version}" 'index($0,heading)==1{f=1;next} f&&/^## /{exit} f{print}' CHANGELOG.md > release-notes.md
           if gh release view "$version" >/dev/null 2>&1; then
             gh release upload "$version" "$zip_name" "$zip_name.sha256" --clobber
             gh release edit "$version" --title "$version" --notes-file release-notes.md --latest
           else
-            gh release create "$version" "$zip_name" "$zip_name.sha256" \
-              --target "$GITHUB_SHA" \
-              --title "$version" \
-              --notes-file release-notes.md \
-              --latest
+            gh release create "$version" "$zip_name" "$zip_name.sha256" --target "$GITHUB_SHA" --title "$version" --notes-file release-notes.md --latest
           fi
