@@ -212,6 +212,7 @@ scan_script() {
 
 collect_modules() {
     : > "$MODULE_FILE"
+    : > "$MODULE_STATUS_FILE"
     : > "$ENTRY_FILE"
     : > "$REPLACE_FILE"
     : > "$PROP_FILE"
@@ -225,10 +226,6 @@ collect_modules() {
         [ -d "$module_dir" ] || continue
         module_root="${module_dir%/}"
         module=$(basename "$module_root")
-        [ -f "$module_root/disable" ] && continue
-        [ -f "$module_root/remove" ] && continue
-        module_has_relevant_content "$module_root" || continue
-
         prop="$module_root/module.prop"
         name=$(module_prop_value "$prop" name)
         version=$(module_prop_value "$prop" version)
@@ -236,9 +233,20 @@ collect_modules() {
         [ -n "$version" ] || version="unknown"
         name=$(printf '%s' "$name" | tr '\t\r\n' '   ')
         version=$(printf '%s' "$version" | tr '\t\r\n' '   ')
+
+        status="active"
+        [ -f "$module_root/disable" ] && status="disabled"
+        [ -f "$module_root/remove" ] && status="remove_pending"
+        [ "$status" = "active" ] && [ -f "$module_root/skip_mount" ] && status="active_skip_mount"
+        relevant=1
+        module_has_relevant_content "$module_root" || relevant=0
+        printf '%s\t%s\t%s\t%s\t%s\n' "$module" "$name" "$version" "$status" "$relevant" >> "$MODULE_STATUS_FILE"
+
+        case "$status" in disabled|remove_pending) continue ;; esac
+        [ "$relevant" = "1" ] || continue
         printf '%s\t%s\t%s\t%s\n' "$module" "$name" "$version" "$module_root" >> "$MODULE_FILE"
 
-        if [ ! -f "$module_root/skip_mount" ]; then
+        if [ "$status" != "active_skip_mount" ]; then
             scan_tree "$module_root" "$module" system
             for root in $MOUNT_ROOTS; do scan_tree "$module_root" "$module" "$root"; done
         fi
@@ -253,9 +261,9 @@ collect_modules() {
     done
 
     sort -u "$MODULE_FILE" -o "$MODULE_FILE" 2>/dev/null
+    sort -u "$MODULE_STATUS_FILE" -o "$MODULE_STATUS_FILE" 2>/dev/null
     sort -u "$ENTRY_FILE" -o "$ENTRY_FILE" 2>/dev/null
     sort -u "$REPLACE_FILE" -o "$REPLACE_FILE" 2>/dev/null
     sort -u "$PROP_FILE" -o "$PROP_FILE" 2>/dev/null
     sort -u "$SCRIPT_FILE" -o "$SCRIPT_FILE" 2>/dev/null
 }
-
