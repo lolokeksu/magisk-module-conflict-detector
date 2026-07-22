@@ -1,39 +1,41 @@
 # Changelog
 
+## v1.4 - 22.07.2026
+
+- Added an interactive default `mcd-ctrl` menu with numbered actions.
+- Added persistent Russian and English UI switching.
+- Added an advanced menu accessible from the default menu.
+- Added mountinfo-based effective owner detection with 100% confidence when the module source is proven.
+- Added inode and live-content fallback matching.
+- Removed lexical winner guessing for file, property and `.replace` collisions when evidence is unavailable.
+- Added evidence states: CONFIRMED, PROBABLE, POSSIBLE and INFORMATIONAL.
+- Added stable finding IDs to text and JSON reports.
+- Added `mcd-ctrl explain FINDING_ID`.
+- Added `mcd-ctrl summary`.
+- Added report filtering by severity, module and finding ID.
+- Added active, disabled, pending-removal, pending-update, incomplete and skip-mount module states.
+- Added timestamped report history with configurable retention.
+- Added `mcd-ctrl history` and `mcd-ctrl diff`.
+- Added persistent SHA-256 cache and cache management commands.
+- Added `mcd-ctrl support-bundle` with privacy-conscious diagnostic collection.
+- Added JSON schema v2 with module states, evidence status and scan duration.
+- Extended runtime-script parsing for multiline commands, literal variables, tee writes, delete operations, setenforce, overlay/package state, netfilter and traffic control.
+- Improved critical-only output when no critical conflicts exist.
+- Added v1.4 regression tests for ownership evidence, finding IDs, module states, JSON, language switching and interactive control.
+
 ## v1.3 - 21.07.2026
 
-- Replaced the v1.2 scanner core with a value-aware and content-aware engine.
-- Added SHA-256 candidate comparison and informational classification for identical duplicates.
-- Added live effective-owner matching for mounted files, properties and sysfs values, with method and confidence fields.
-- Added canonical path normalization across `system`, `vendor`, `product`, `system_ext`, `odm` and `*_dlkm` overlays.
-- Added `.replace` collision and tree-masking analysis.
-- Added module-local `overlay.d` scanning and global `/data/adb/overlay.d` inventory.
-- Added `system.prop` value comparison and current-value matching.
-- Added runtime-script analysis for properties, settings, device_config, sysctl, sysfs, mounts, file operations, permissions and live sepolicy actions.
-- Added exact known-pair database support, whitelist handling, snapshots and before/after comparison.
-- Added device metadata and an expanded JSON report schema.
-- Added stale scan-lock recovery and `--critical-only` reporting.
-- Fixed false combined root-manager results caused by stale/shared `/data/adb` directories.
-- Root-manager detection now prioritizes the active `su` provider signature, then exact daemon names, then manager-owned executable binaries.
-- Added family-aware detection for Magisk-compatible, KernelSU-family and APatch managers, including identifiable forks.
-- Added root detection method, confidence, family and evidence to `doctor` and JSON reports.
-- Fixed automatic scans on APatch/FolkPatch where a background child could be terminated after `service.sh` exited.
-- Added native `boot-completed.sh` support for APatch and KernelSU-family managers.
-- Added a shared one-shot boot launcher with per-boot deduplication, process locking and stale-lock recovery.
-- Added `/data/adb/mcd/boot-scan.status`, `/data/adb/mcd/boot-scan.log` and `mcd-ctrl boot-status`.
-- Added a bounded wait for `sys.boot_completed` in the Magisk-compatible service fallback.
+- Replaced the scanner core with value-aware and content-aware conflict analysis.
+- Added robust root-manager detection and reliable boot scanning across Magisk, KernelSU-family and APatch.
+- Added SHA-256 comparison, live winner checks, snapshots, JSON reports and mobile CLI help.
 
 ## v1.2 - 28.06.2026
 
-- Refactored the module layout while preserving `id=ModuleConflictDetector`.
-- Fixed relative-path construction in path collision scanning.
-- Moved the CLI to `bin/mcd-ctrl` and added a `/system/bin` entry point.
-- Added action, uninstall, lock, config, doctor, whitelist safety, symlink/whiteout scanning, `.replace` masking and `system.prop` key scanning.
+- Refactored the module structure and fixed path collision scanning.
 
 ## v1.1 - 10.06.2026
 
 - Added whitelist support and `.replace` collision detection.
-- Fixed conflict count generation.
 
 ## v1.0 - 09.06.2026
 
