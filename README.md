@@ -1,97 +1,49 @@
-# Module Conflict Detector v1.3
+# Module Conflict Detector v1.4
 
-Read-only diagnostic module for Magisk-compatible, KernelSU-family and APatch module systems. It finds collisions between active root modules without modifying modules, mounts, properties, sysfs or SELinux policy.
+Read-only diagnostic module for Magisk-compatible, KernelSU-family and APatch module systems.
 
-## Supported root-manager families
+## v1.4 highlights
 
-- Magisk and managers exposing a Magisk-compatible `su`/module environment.
-- KernelSU, KernelSU Next, SukiSU Ultra, ReSukiSU and other `ksud`-compatible forks.
-- APatch and managers exposing an APatch-compatible `apd` environment.
+- Stable finding IDs such as `MCD-2A31F4B9C810`.
+- `mcd-ctrl explain ID` with winner evidence, confidence, impact and safe recommendation.
+- Interactive Android-friendly menu through the module action button or `mcd-ctrl menu`.
+- Baseline comparison before and after installing modules.
+- Privacy-aware diagnostic export.
+- Versioned known-conflict rules with module-version, root-family and SDK constraints.
+- Self-test and isolated full fixture test.
+- Active/disabled/remove-pending/skip-mount inventory.
 
-The module directory remains `/data/adb/modules`, which is shared by these module systems.
+## Interactive menu
 
-## Root-manager detection
-
-Detection is evidence-ranked to prevent stale directories from producing false combinations:
-
-1. Current `su -v` or `su --version` provider signature.
-2. Exact active daemon: `magiskd`, `ksud` or `apd`.
-3. Executable manager-owned core binary.
-4. Unique directory layout as a low-confidence fallback only.
-
-A retained `/data/adb/magisk`, `/data/adb/ksu` or `/data/adb/ap` directory alone never overrides stronger evidence. Ambiguous leftovers are reported as `unknown`, not as multiple simultaneously active managers.
-
-`mcd-ctrl doctor` and `report.json` include:
-
-- `root_manager`
-- `root_manager_family`
-- `root_detection_method`
-- `root_detection_confidence`
-- `root_detection_evidence`
-
-## Conflict-analysis capabilities
-
-- Canonical path collision detection across `system`, `vendor`, `product`, `system_ext`, `odm` and `*_dlkm` overlays.
-- SHA-256 comparison: different content is actionable; identical duplicates are informational.
-- Live winner resolution by matching the mounted file, current property or current sysfs value to module candidates.
-- Explicit lexical fallback when an effective owner cannot be proven.
-- `.replace` collision and tree-masking analysis.
-- Module-local `overlay.d` analysis and global `/data/adb/overlay.d` inventory.
-- `system.prop` key and value comparison.
-- Runtime-script analysis for `service.sh`, `post-fs-data.sh`, `boot-completed.sh` and `action.sh`.
-- Detection of conflicting property, settings, device_config, sysctl, sysfs, mount, file-operation, permission and live-sepolicy actions.
-- Exact known-pair database, whitelist, snapshots and stale-lock recovery.
-
-## Installation
-
-1. Download `ModuleConflictDetector-v1.3.zip` from the GitHub release.
-2. Install it in Magisk, KernelSU-family or APatch manager.
-3. Reboot.
-4. Verify with `su -c 'mcd-ctrl doctor'`.
+Running `mcd-ctrl` without arguments opens a compact bilingual menu with Quick scan, Full scan and Advanced menu. Option 4 switches between Russian and English and persists the choice in `/data/adb/mcd/ui-language.conf`.
 
 ## Commands
 
 ```sh
-su -c 'mcd-ctrl version'
-su -c 'mcd-ctrl doctor'
-su -c 'mcd-ctrl boot-status'
+su -c 'mcd-ctrl'        # interactive menu
+su -c 'mcd-ctrl menu'   # explicit menu
 su -c 'mcd-ctrl scan --deep'
 su -c 'mcd-ctrl report'
-su -c 'mcd-ctrl report --json'
 su -c 'mcd-ctrl report --critical-only'
-
-su -c 'mcd-ctrl snapshot create before-install'
-su -c 'mcd-ctrl snapshot compare before-install'
-su -c 'mcd-ctrl snapshot list'
-su -c 'mcd-ctrl snapshot delete before-install'
-
-su -c 'mcd-ctrl whitelist add /system/bin/example'
-su -c 'mcd-ctrl whitelist add system.prop:debug.hwui.renderer'
-su -c 'mcd-ctrl whitelist add script:prop:debug.hwui.renderer'
-su -c 'mcd-ctrl whitelist list'
-
-su -c 'mcd-ctrl config list'
-su -c 'mcd-ctrl config set auto_scan 0'
-su -c 'mcd-ctrl clear'
+su -c 'mcd-ctrl explain MCD-XXXXXXXXXXXX'
+su -c 'mcd-ctrl baseline create'
+su -c 'mcd-ctrl baseline compare'
+su -c 'mcd-ctrl export --privacy'
+su -c 'mcd-ctrl self-test --full'
+su -c 'mcd-ctrl boot-status'
+su -c 'mcd-ctrl doctor'
 ```
-
-## Automatic boot scan
-
-- Magisk-compatible managers use the non-backgrounded `service.sh` fallback.
-- KernelSU-family and APatch managers can use the native `boot-completed.sh` hook.
-- Both lifecycle paths call one shared launcher with a per-boot ID and process lock, so only one scan is written per boot.
-- Status: `/data/adb/mcd/boot-scan.status`.
-- Diagnostic log: `/data/adb/mcd/boot-scan.log`.
-- A successful automatic report contains `"boot_scan": true`.
 
 ## Reports
 
 - `/data/adb/mcd/conflicts.log`
 - `/data/adb/mcd/report.json`
-- `/data/adb/mcd/reports/conflicts-latest.log`
-- `/data/adb/mcd/reports/report-latest.json`
-- `/data/adb/mcd/snapshots/*.tsv`
+- `/data/adb/mcd/findings.tsv`
+- `/data/adb/mcd/module-status.tsv`
+- `/data/adb/mcd/baseline.tsv`
+- `/data/adb/mcd/baseline-diff.txt`
+- `/data/adb/mcd/boot-scan.log`
 
 ## Safety
 
-The scanner is read-only. It does not mount or unmount filesystems, change properties, write sysfs, modify SELinux policy or disable modules.
+The scanner does not disable modules, modify mounts, write properties or sysfs, or alter SELinux policy. Recommendations are advisory. Low-confidence winner methods are explicitly labelled as heuristics.
