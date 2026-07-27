@@ -210,6 +210,34 @@ scan_script() {
     ' "$file" >> "$SCRIPT_FILE"
 }
 
+
+scan_sepolicy() {
+    module_root="$1"
+    module="$2"
+    file="$module_root/sepolicy.rule"
+    [ -f "$file" ] || return
+
+    awk -v module="$module" -v source="$file" '
+        BEGIN { OFS="	" }
+        function trim(v) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
+        {
+            raw=$0
+            sub(/$/, "", raw)
+            sub(/[[:space:]]*#.*/, "", raw)
+            raw=trim(raw)
+            if (raw == "") next
+            norm=raw
+            gsub(/[[:space:]]+/, " ", norm)
+            n=split(norm, a, " ")
+            action=a[1]
+            simple=(n==5 && action ~ /^(allow|deny|auditallow|dontaudit)$/ && norm !~ /[{}]/)
+            if (simple) key="simple:" a[2] ":" a[3] ":" a[4] ":" a[5]
+            else key="raw:" norm
+            print key, module, action, norm, source ":" NR
+        }
+    ' "$file" >> "$SEPOLICY_FILE"
+}
+
 collect_modules() {
     : > "$MODULE_FILE"
     : > "$MODULE_STATUS_FILE"
@@ -217,10 +245,16 @@ collect_modules() {
     : > "$REPLACE_FILE"
     : > "$PROP_FILE"
     : > "$SCRIPT_FILE"
+    : > "$SEPOLICY_FILE"
 
-    script_scan=$(get_config script_scan 1)
-    overlay_scan=$(get_config overlayd_scan 1)
-    [ "$DEEP_MODE" = "1" ] && { script_scan=1; overlay_scan=1; }
+    script_scan=0
+    overlay_scan=0
+    sepolicy_scan=0
+    if [ "$DEEP_MODE" = "1" ]; then
+        script_scan=$(get_config script_scan 1)
+        overlay_scan=$(get_config overlayd_scan 1)
+        sepolicy_scan=$(get_config sepolicy_scan 1)
+    fi
 
     for module_dir in "$MODULES_DIR"/*; do
         [ -d "$module_dir" ] || continue
@@ -258,6 +292,7 @@ collect_modules() {
                 scan_script "$module_root" "$module" "$script"
             done
         fi
+        [ "$sepolicy_scan" = "1" ] && scan_sepolicy "$module_root" "$module"
     done
 
     sort -u "$MODULE_FILE" -o "$MODULE_FILE" 2>/dev/null
@@ -266,4 +301,6 @@ collect_modules() {
     sort -u "$REPLACE_FILE" -o "$REPLACE_FILE" 2>/dev/null
     sort -u "$PROP_FILE" -o "$PROP_FILE" 2>/dev/null
     sort -u "$SCRIPT_FILE" -o "$SCRIPT_FILE" 2>/dev/null
+    sort -u "$SEPOLICY_FILE" -o "$SEPOLICY_FILE" 2>/dev/null
 }
+

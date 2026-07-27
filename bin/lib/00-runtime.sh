@@ -3,7 +3,7 @@
 # Read-only conflict analysis for Magisk / KernelSU / APatch modules.
 
 VERSION="v1.4"
-VERSION_CODE="140"
+VERSION_CODE="142"
 SELF_ID="ModuleConflictDetector"
 
 MCD_DIR="${MCD_DIR:-/data/adb/mcd}"
@@ -17,7 +17,10 @@ SNAPSHOTS_DIR="$MCD_DIR/snapshots"
 TMP_DIR="$MCD_DIR/tmp"
 CONFIG_FILE="$MCD_DIR/config.conf"
 WHITELIST_FILE="$MCD_DIR/whitelist.conf"
-KNOWN_FILE="$MCD_DIR/known-conflicts.conf"
+MCD_MODULE_ROOT="${MCD_MODULE_ROOT:-${MCD_LIB_DIR%/bin/lib}}"
+KNOWN_BUILTIN_FILE="$MCD_MODULE_ROOT/config/known-conflicts.conf"
+KNOWN_LOCAL_FILE="$MCD_DIR/known-conflicts.local.conf"
+KNOWN_LEGACY_FILE="$MCD_DIR/known-conflicts.conf"
 LOG_FILE="$MCD_DIR/conflicts.log"
 JSON_FILE="$MCD_DIR/report.json"
 LOCK_DIR="$MCD_DIR/.scan.lock"
@@ -37,11 +40,13 @@ ENTRY_FILE="$TMP_DIR/entries.tsv"
 REPLACE_FILE="$TMP_DIR/replace.tsv"
 PROP_FILE="$TMP_DIR/properties.tsv"
 SCRIPT_FILE="$TMP_DIR/script-events.tsv"
+SEPOLICY_FILE="$TMP_DIR/sepolicy-rules.tsv"
 PATH_GROUP_FILE="$TMP_DIR/path-groups.tsv"
 REPLACE_GROUP_FILE="$TMP_DIR/replace-groups.tsv"
 REPLACE_MASK_FILE="$TMP_DIR/replace-masks.tsv"
 PROP_GROUP_FILE="$TMP_DIR/property-groups.tsv"
 SCRIPT_GROUP_FILE="$TMP_DIR/script-groups.tsv"
+SEPOLICY_GROUP_FILE="$TMP_DIR/sepolicy-groups.tsv"
 JSON_ITEMS_FILE="$TMP_DIR/findings.jsonl"
 COUNT_FINDINGS_FILE="$TMP_DIR/count.findings"
 COUNT_CONFLICTS_FILE="$TMP_DIR/count.conflicts"
@@ -55,13 +60,14 @@ MOUNT_ROOTS="vendor product system_ext odm system_dlkm vendor_dlkm odm_dlkm"
 QUIET=0
 BOOT_MODE=0
 DEEP_MODE=0
+SCAN_PROFILE="quick"
 CRITICAL_ONLY=0
 
 for arg in "$@"; do
     case "$arg" in
         --quiet) QUIET=1 ;;
         --boot) BOOT_MODE=1 ;;
-        --deep) DEEP_MODE=1 ;;
+        --deep) DEEP_MODE=1; SCAN_PROFILE="full" ;;
         --critical-only) CRITICAL_ONLY=1 ;;
     esac
 done
@@ -82,37 +88,58 @@ boot_delay_seconds=30
 # Maximum file examples in one .replace masking finding
 replace_examples_limit=20
 
-# Analyze service.sh, post-fs-data.sh, boot-completed.sh and action.sh
+# Full-scan components. Quick scan always skips scripts, overlay.d and sepolicy.
 script_scan=1
-
-# Analyze module-local overlay.d and inventory global /data/adb/overlay.d
 overlayd_scan=1
+sepolicy_scan=1
 
-# Hash candidates only when the same target is claimed by multiple modules
+# Hash only collision candidates. Kept enabled in both quick and full scans
+# to avoid false conflicts for byte-identical files.
 hash_conflicts=1
 
-# Check exact module pairs listed in known-conflicts.conf
+# Check built-in and user-maintained exact module-pair rules.
 known_conflicts=1
 
-# Compare the current scan with an existing baseline after every scan
+# Generic module priority is not standardized across root managers.
+# Leave disabled unless you have verified the manager's ordering semantics.
+trust_module_priority=0
+
+# Compare the current scan with an existing baseline after every scan.
 baseline_compare_on_scan=1
 CFG
 }
 
-write_default_known_db() {
-    cat > "$KNOWN_FILE" <<'DB'
-# database_version=2
-# TSV columns:
-# rule_id module_a module_b min_a max_a min_b max_b root_family sdk_min sdk_max severity category reason source added
-# Use * for unrestricted fields. Add only verified rules.
-# KC001	ModuleA	ModuleB	*	*	*	*	*	*	*	HIGH	subsystem	Both modules control the same subsystem.	manual	2026-07-22
-DB
+ensure_config_key() {
+    key="$1"; value="$2"
+    grep -q "^[[:space:]]*$key=" "$CONFIG_FILE" 2>/dev/null || printf '%s=%s
+' "$key" "$value" >> "$CONFIG_FILE"
 }
+
 ensure_dirs() {
     mkdir -p "$MCD_DIR" "$REPORTS_DIR" "$SNAPSHOTS_DIR" "$TMP_DIR" "$EXPORT_FALLBACK_DIR" 2>/dev/null
     [ -f "$CONFIG_FILE" ] || write_default_config
+    ensure_config_key auto_scan 1
+    ensure_config_key boot_delay_seconds 30
+    ensure_config_key replace_examples_limit 20
+    ensure_config_key script_scan 1
+    ensure_config_key overlayd_scan 1
+    ensure_config_key sepolicy_scan 1
+    ensure_config_key hash_conflicts 1
+    ensure_config_key known_conflicts 1
+    ensure_config_key trust_module_priority 0
+    ensure_config_key baseline_compare_on_scan 1
     [ -f "$WHITELIST_FILE" ] || : > "$WHITELIST_FILE"
-    [ -f "$KNOWN_FILE" ] || write_default_known_db
+    [ -f "$KNOWN_LOCAL_FILE" ] || {
+        if [ -f "$KNOWN_LEGACY_FILE" ]; then
+            cp -f "$KNOWN_LEGACY_FILE" "$KNOWN_LOCAL_FILE" 2>/dev/null || : > "$KNOWN_LOCAL_FILE"
+        else
+            cat > "$KNOWN_LOCAL_FILE" <<'DB'
+# User-maintained known-conflict rules.
+# TSV columns:
+# rule_id module_a module_b min_a max_a min_b max_b root_family sdk_min sdk_max severity category reason source added
+DB
+        fi
+    }
 }
 
 get_config() {
@@ -183,12 +210,18 @@ csv_to_json_array() {
 }
 
 finding_id_for() {
-    type="$1"; target="$2"; owners="$3"
+    type="$1"; target="$2"; owners="$3"; identity_key="${4-}"
     normalized_owners=$(printf '%s\n' $owners | LC_ALL=C sort 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-    digest=$(hash_text "$type|$target|$normalized_owners")
+    digest=$(hash_text "$type|$target|$normalized_owners|$identity_key")
     digest=$(printf '%s' "$digest" | tr 'a-f' 'A-F' | cut -c1-12)
     [ -n "$digest" ] || digest="000000000000"
     printf 'MCD-%s' "$digest"
+}
+
+finding_id_exists() {
+    wanted_id="$1"
+    [ -s "$FINDINGS_INDEX_FILE" ] || return 1
+    awk -F '\t' -v id="$wanted_id" '$1==id {found=1; exit} END {exit(found ? 0 : 1)}' "$FINDINGS_INDEX_FILE"
 }
 
 finding_actionability() {
@@ -202,7 +235,7 @@ finding_reason_codes() {
     case "$severity" in CRITICAL) codes="$codes,critical_target" ;; HIGH) codes="$codes,high_risk_target" ;; esac
     case "$method" in
         live_*|current_*_match) codes="$codes,live_winner_confirmed" ;;
-        explicit_module_priority|*explicit_priority*) codes="$codes,explicit_priority" ;;
+        *user_priority_heuristic*) codes="$codes,user_enabled_priority,heuristic_winner" ;;
         *heuristic*) codes="$codes,heuristic_winner" ;;
         unresolved|runtime_order_unresolved) codes="$codes,winner_unresolved" ;;
     esac
@@ -243,13 +276,16 @@ module_priority_value() {
 }
 
 precedence_winner() {
-    owners="$1"; best=""; best_value=""; tie=0
+    owners="$1"; best=""; best_value=""; tie=0; seen=0; expected=0
+    [ "$(get_config trust_module_priority 0)" = "1" ] || return 1
     for module in $owners; do
-        value=$(module_priority_value "$module") || continue
+        expected=$((expected + 1))
+        value=$(module_priority_value "$module") || return 1
+        seen=$((seen + 1))
         if [ -z "$best" ] || [ "$value" -gt "$best_value" ]; then best="$module"; best_value="$value"; tie=0
         elif [ "$value" -eq "$best_value" ]; then tie=1; fi
     done
-    [ -n "$best" ] && [ "$tie" = "0" ] || return 1
+    [ "$seen" -eq "$expected" ] && [ -n "$best" ] && [ "$tie" = "0" ] || return 1
     printf '%s' "$best"
 }
 
@@ -275,11 +311,11 @@ count_get() {
 
 severity_of_path() {
     case "$1" in
-        /overlay.d/*|*/etc/init/*|*/etc/permissions/*|*/etc/sysconfig/*|*/etc/vintf/*|*sepolicy*|*/bin/*|*/xbin/*|*/apex/*)
+        /system|/vendor|/product|/system_ext|/odm|/system_dlkm|/vendor_dlkm|/odm_dlkm|/overlay.d|/overlay.d/*|*/bin|*/bin/*|*/xbin|*/xbin/*|*/apex|*/apex/*|*/etc/init|*/etc/init/*|*/etc/permissions|*/etc/permissions/*|*/etc/sysconfig|*/etc/sysconfig/*|*/etc/vintf|*/etc/vintf/*|*sepolicy*)
             echo "CRITICAL" ;;
-        */framework/*|*/priv-app/*|*/app/*|*/overlay/*|*/lib64/*|*/lib/*|*/build.prop|*/default.prop|*/system.prop)
+        */framework|*/framework/*|*/priv-app|*/priv-app/*|*/app|*/app/*|*/overlay|*/overlay/*|*/lib64|*/lib64/*|*/lib|*/lib/*|*/etc|*/etc/*|*/build.prop|*/default.prop|*/system.prop)
             echo "HIGH" ;;
-        */etc/*|*/fonts/*|*/media/*|*/usr/*)
+        */fonts|*/fonts/*|*/media|*/media/*|*/usr|*/usr/*)
             echo "MEDIUM" ;;
         *)
             echo "LOW" ;;
@@ -321,9 +357,9 @@ in_whitelist() {
 }
 
 cleanup_scan_temp() {
-    rm -f "$MODULE_FILE" "$MODULE_STATUS_FILE" "$ENTRY_FILE" "$REPLACE_FILE" "$PROP_FILE" "$SCRIPT_FILE" \
+    rm -f "$MODULE_FILE" "$MODULE_STATUS_FILE" "$ENTRY_FILE" "$REPLACE_FILE" "$PROP_FILE" "$SCRIPT_FILE" "$SEPOLICY_FILE" \
         "$PATH_GROUP_FILE" "$REPLACE_GROUP_FILE" "$REPLACE_MASK_FILE" \
-        "$PROP_GROUP_FILE" "$SCRIPT_GROUP_FILE" "$JSON_ITEMS_FILE" \
+        "$PROP_GROUP_FILE" "$SCRIPT_GROUP_FILE" "$SEPOLICY_GROUP_FILE" "$JSON_ITEMS_FILE" \
         "$COUNT_FINDINGS_FILE" "$COUNT_CONFLICTS_FILE" "$COUNT_CRITICAL_FILE" \
         "$COUNT_HIGH_FILE" "$COUNT_MEDIUM_FILE" "$COUNT_LOW_FILE" "$COUNT_INFO_FILE" \
         "$TMP_DIR"/*.work "$TMP_DIR"/*.sorted "$TMP_DIR"/*.candidate "$TMP_DIR"/*.manifest 2>/dev/null
@@ -367,3 +403,4 @@ ROOT_MANAGER_FAMILY="unknown"
 ROOT_DETECTION_METHOD="none"
 ROOT_DETECTION_CONFIDENCE="low"
 ROOT_DETECTION_EVIDENCE="no manager-specific runtime evidence"
+

@@ -1,49 +1,61 @@
 # Module Conflict Detector v1.4
 
-Read-only diagnostic module for Magisk-compatible, KernelSU-family and APatch module systems.
+Read-only диагностический модуль для поиска конфликтов между модулями Magisk, KernelSU-family и APatch-family.
 
-## v1.4 highlights
+## Основные возможности
 
-- Stable finding IDs such as `MCD-2A31F4B9C810`.
-- `mcd-ctrl explain ID` with winner evidence, confidence, impact and safe recommendation.
-- Interactive Android-friendly menu through the module action button or `mcd-ctrl menu`.
-- Baseline comparison before and after installing modules.
-- Privacy-aware diagnostic export.
-- Versioned known-conflict rules with module-version, root-family and SDK constraints.
-- Self-test and isolated full fixture test.
-- Active/disabled/remove-pending/skip-mount inventory.
+- Поиск конфликтов файлов, свойств, runtime-скриптов, `.replace`, `overlay.d` и простых правил `sepolicy.rule`.
+- Сравнение содержимого файлов по SHA-256.
+- Определение фактически применённого файла или значения, когда это можно подтвердить по текущей системе.
+- Стабильные ID находок и подробное объяснение через `mcd-ctrl explain ID`.
+- Раздельные быстрая и полная проверки.
+- Baseline для сравнения состояния до и после установки модулей.
+- Экспорт диагностики с режимом редактирования данных устройства.
+- Встроенная и пользовательская базы известных конфликтов.
+- Расширенная самопроверка и мобильное интерактивное меню.
 
-## Interactive menu
+## Установка
 
-Running `mcd-ctrl` without arguments opens a compact bilingual menu with Quick scan, Full scan and Advanced menu. Option 4 switches between Russian and English and persists the choice in `/data/adb/mcd/ui-language.conf`.
-
-## Commands
+1. Скачайте `ModuleConflictDetector-v1.4.zip` из релиза `v1.4`.
+2. Установите архив через Magisk, KernelSU, APatch или совместимый менеджер.
+3. Перезагрузите устройство.
+4. Выполните:
 
 ```sh
-su -c 'mcd-ctrl'        # interactive menu
-su -c 'mcd-ctrl menu'   # explicit menu
-su -c 'mcd-ctrl scan --deep'
-su -c 'mcd-ctrl report'
-su -c 'mcd-ctrl report --critical-only'
+su -c 'mcd-ctrl version'
+su -c 'mcd-ctrl self-test --full'
+su -c 'mcd-ctrl'
+```
+
+## Основные команды
+
+```sh
+su -c 'mcd-ctrl'                         # интерактивное меню
+su -c 'mcd-ctrl scan'                    # быстрая проверка
+su -c 'mcd-ctrl scan --deep'             # полная проверка
+su -c 'mcd-ctrl report'                  # последний отчёт
+su -c 'mcd-ctrl report --critical-only'  # только критические находки
 su -c 'mcd-ctrl explain MCD-XXXXXXXXXXXX'
 su -c 'mcd-ctrl baseline create'
 su -c 'mcd-ctrl baseline compare'
-su -c 'mcd-ctrl export --privacy'
+su -c 'mcd-ctrl export --redact'
 su -c 'mcd-ctrl self-test --full'
 su -c 'mcd-ctrl boot-status'
 su -c 'mcd-ctrl doctor'
 ```
 
-## Reports
+## Быстрая и полная проверки
 
-- `/data/adb/mcd/conflicts.log`
-- `/data/adb/mcd/report.json`
-- `/data/adb/mcd/findings.tsv`
-- `/data/adb/mcd/module-status.tsv`
-- `/data/adb/mcd/baseline.tsv`
-- `/data/adb/mcd/baseline-diff.txt`
-- `/data/adb/mcd/boot-scan.log`
+Быстрая проверка анализирует основные файловые конфликты, `.replace`, `system.prop`, состояния модулей и базу известных пар.
 
-## Safety
+Полная проверка дополнительно анализирует runtime-скрипты, `overlay.d` и `sepolicy.rule`. Автоматическая проверка после загрузки использует полный профиль.
 
-The scanner does not disable modules, modify mounts, write properties or sysfs, or alter SELinux policy. Recommendations are advisory. Low-confidence winner methods are explicitly labelled as heuristics.
+## Безопасность
+
+Модуль не отключает и не удаляет другие модули, не изменяет системные свойства, sysfs, порядок монтирования или SELinux policy. Он записывает только собственные отчёты, настройки и диагностические файлы в `/data/adb/mcd`.
+
+## Совместимость
+
+- Magisk и совместимые менеджеры.
+- KernelSU и поддерживаемые форки.
+- APatch, FolkPatch и поддерживаемые форки.

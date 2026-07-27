@@ -58,12 +58,22 @@ add_finding() {
     detail="$8"
     evidence_json="$9"
     is_conflict="${10}"
+    identity_key="${11-}"
 
     [ -n "$evidence_json" ] || evidence_json="[]"
     case "$confidence" in ''|*[!0-9]*) confidence=0 ;; esac
     [ "$is_conflict" = "1" ] && conflict_json=true || conflict_json=false
 
-    finding_id=$(finding_id_for "$type" "$target" "$owners")
+    finding_id=$(finding_id_for "$type" "$target" "$owners" "$identity_key")
+    if finding_id_exists "$finding_id"; then
+        collision_key="$identity_key|$winner|$method|$detail|$evidence_json"
+        finding_id=$(finding_id_for "$type" "$target" "$owners" "$collision_key")
+        collision_index=2
+        while finding_id_exists "$finding_id"; do
+            finding_id=$(finding_id_for "$type" "$target" "$owners" "$collision_key|$collision_index")
+            collision_index=$((collision_index + 1))
+        done
+    fi
     actionability=$(finding_actionability "$severity" "$is_conflict")
     reason_codes=$(finding_reason_codes "$type" "$severity" "$method" "$target")
     recommendation=$(finding_recommendation "$type" "$severity" "$is_conflict" "$method")
@@ -191,12 +201,12 @@ analyze_path_candidates() {
         elif [ "$match_count" -gt 1 ]; then
             WINNER=$(precedence_winner "$matches" 2>/dev/null)
             if [ -n "$WINNER" ]; then
-                WINNER_CONF=85
-                WINNER_METHOD="live_content_plus_explicit_priority"
+                WINNER_CONF=35
+                WINNER_METHOD="live_content_plus_user_priority_heuristic"
             else
-                WINNER=$(lexical_winner "$matches")
-                WINNER_CONF=45
-                WINNER_METHOD="live_content_multiple_lexical_heuristic"
+                WINNER=""
+                WINNER_CONF=0
+                WINNER_METHOD="multiple_live_matches_unresolved"
             fi
             return
         fi
@@ -204,12 +214,12 @@ analyze_path_candidates() {
 
     WINNER=$(precedence_winner "$owners" 2>/dev/null)
     if [ -n "$WINNER" ]; then
-        WINNER_CONF=70
-        WINNER_METHOD="explicit_module_priority"
+        WINNER_CONF=35
+        WINNER_METHOD="user_enabled_priority_heuristic"
     else
-        WINNER=$(lexical_winner "$owners")
-        WINNER_CONF=25
-        WINNER_METHOD="lexical_module_id_heuristic"
+        WINNER=""
+        WINNER_CONF=0
+        WINNER_METHOD="unresolved"
     fi
 }
 
@@ -265,9 +275,17 @@ process_replace_conflicts() {
         while IFS="$(printf '\t')" read -r path owners; do
             [ -n "$path" ] || continue
             in_whitelist "$path" && continue
-            winner=$(lexical_winner "$owners")
+            winner=$(precedence_winner "$owners" 2>/dev/null)
+            if [ -n "$winner" ]; then
+                winner_conf=35
+                winner_method="user_enabled_priority_heuristic"
+            else
+                winner=""
+                winner_conf=0
+                winner_method="unresolved"
+            fi
             severity=$(severity_of_path "$path")
-            add_finding "replace_dir_collision" "$path" "$severity" "$owners" "$winner" 45 "lexical_module_id_heuristic" "multiple active modules declare .replace for the same directory" "[]" 1
+            add_finding "replace_dir_collision" "$path" "$severity" "$owners" "$winner" "$winner_conf" "$winner_method" "multiple active modules declare .replace for the same directory" "[]" 1
         done < "$REPLACE_GROUP_FILE"
     fi
 
@@ -290,6 +308,7 @@ process_replace_conflicts() {
         owners="$replacer $affected"
         severity=$(severity_of_path "$path")
         detail="replace_owner=$replacer; masked_entries=$count; examples=$examples"
-        add_finding "replace_masks_tree" "$path" "$severity" "$owners" "$replacer" 90 "explicit_replace_owner" "$detail" "[]" 1
+        add_finding "replace_masks_tree" "$path" "$severity" "$owners" "$replacer" 90 "explicit_replace_owner" "$detail" "[]" 1 "replace_owner=$replacer"
     done < "$TMP_DIR/replace-mask-groups.work"
 }
+

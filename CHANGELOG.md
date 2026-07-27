@@ -1,54 +1,59 @@
 # Changelog
 
-## v1.4 - 22.07.2026
+## v1.4 - 27.07.2026
 
-- Default `mcd-ctrl` now opens a compact bilingual Russian/English menu with three primary actions and a separate advanced mode.
-- Added a compact interactive mobile menu for module action and `mcd-ctrl menu`.
-- Added stable finding IDs and `mcd-ctrl explain ID` with risk, impact and recommendation.
-- Added confidence, actionability and reason codes to text and JSON findings.
-- Added explicit module-priority winner resolution before low-confidence lexical fallback.
-- Added active, disabled, pending-removal and `skip_mount` module inventory.
-- Added baseline create/compare/reset and automatic post-scan baseline diff.
-- Added privacy-aware diagnostic export with ZIP and safe tar.gz fallback.
-- Added a versioned TSV known-conflict database with version, root-family and SDK constraints.
-- Added `mcd-ctrl self-test` and isolated `--full` conflict fixtures.
-- Added compact and full help modes suitable for narrow Android terminals.
+- Добавлено полноценное интерактивное меню для смартфона.
+- Запуск `mcd-ctrl` без аргументов теперь открывает меню.
+- Добавлены отдельные режимы быстрой и полной проверки.
+- Добавлены расширенное меню, изменение настроек и улучшенная справка.
+- Каждая находка получила стабильный уникальный ID формата `MCD-XXXXXXXXXXXX`.
+- Добавлена команда подробного объяснения находки: `mcd-ctrl explain ID`.
+- В отчёты добавлены уровень уверенности, причины, возможные последствия и рекомендации.
+- Улучшено определение фактического победителя конфликта; неподтверждённый результат отмечается как `unresolved`.
+- Добавлено разделение активных, отключённых, ожидающих удаления и `skip_mount` модулей.
+- Исправлена оценка опасности `.replace` для критичных системных директорий.
+- Добавлен базовый консервативный анализ конфликтующих правил `sepolicy.rule`.
+- Добавлена система baseline для сравнения состояния до и после установки модулей.
+- Добавлен экспорт диагностического архива с режимом редактирования данных устройства.
+- Встроенная база известных конфликтов отделена от пользовательских правил и подготовлена для расширения.
+- Расширена самопроверка `mcd-ctrl self-test --full`.
+- Добавлены проверки уникальности и стабильности ID находок.
+- Добавлена строгая проверка JSON-отчётов без обязательной зависимости от Python или `jq`.
+- Улучшена защита от зависшего scan lock и повторного boot-сканирования.
+- При отсутствии критических конфликтов выводится понятное сообщение вместо пустого экрана.
+- Улучшены текстовые и JSON-отчёты.
+- Сохранена совместимость с Magisk, KernelSU, APatch и поддерживаемыми форками.
+- Модуль не изменяет системные параметры и другие модули, записывая только собственные отчёты, настройки и диагностические файлы.
 
 ## v1.3 - 21.07.2026
 
-- Replaced the v1.2 scanner core with a value-aware and content-aware engine.
-- Added SHA-256 candidate comparison and informational classification for identical duplicates.
-- Added live effective-owner matching for mounted files, properties and sysfs values, with method and confidence fields.
-- Added canonical path normalization across `system`, `vendor`, `product`, `system_ext`, `odm` and `*_dlkm` overlays.
-- Added `.replace` collision and tree-masking analysis.
-- Added module-local `overlay.d` scanning and global `/data/adb/overlay.d` inventory.
-- Added `system.prop` value comparison and current-value matching.
-- Added runtime-script analysis for properties, settings, device_config, sysctl, sysfs, mounts, file operations, permissions and live sepolicy actions.
-- Added exact known-pair database support, whitelist handling, snapshots and before/after comparison.
-- Added device metadata and an expanded JSON report schema.
-- Added stale scan-lock recovery and `--critical-only` reporting.
-- Fixed false combined root-manager results caused by stale/shared `/data/adb` directories.
-- Root-manager detection now prioritizes the active `su` provider signature, then exact daemon names, then manager-owned executable binaries.
-- Added family-aware detection for Magisk-compatible, KernelSU-family and APatch managers, including identifiable forks.
-- Added root detection method, confidence, family and evidence to `doctor` and JSON reports.
-- Fixed automatic scans on APatch/FolkPatch where a background child could be terminated after `service.sh` exited.
-- Added native `boot-completed.sh` support for APatch and KernelSU-family managers.
-- Added a shared one-shot boot launcher with per-boot deduplication, process locking and stale-lock recovery.
-- Added `/data/adb/mcd/boot-scan.status`, `/data/adb/mcd/boot-scan.log` and `mcd-ctrl boot-status`.
-- Added a bounded wait for `sys.boot_completed` in the Magisk-compatible service fallback.
-
-## v1.2 - 28.06.2026
-
-- Refactored the module layout while preserving `id=ModuleConflictDetector`.
-- Fixed relative-path construction in path collision scanning.
-- Moved the CLI to `bin/mcd-ctrl` and added a `/system/bin` entry point.
-- Added action, uninstall, lock, config, doctor, whitelist safety, symlink/whiteout scanning, `.replace` masking and `system.prop` key scanning.
-
-## v1.1 - 10.06.2026
-
-- Added whitelist support and `.replace` collision detection.
-- Fixed conflict count generation.
-
-## v1.0 - 09.06.2026
-
-- Initial public release.
+- Полностью переработан движок обнаружения конфликтов.
+- Исправлено определение root-менеджера на устройствах со следами других root-решений.
+- Добавлено точное определение Magisk, KernelSU, APatch и поддерживаемых форков.
+- Добавлены способ определения root, уровень уверенности и диагностическое доказательство.
+- Исправлено ложное определение Magisk+APatch.
+- Добавлено сравнение конфликтующих файлов по SHA-256.
+- Одинаковые файлы теперь отмечаются как информационные дубликаты, а не как реальные конфликты.
+- Добавлено определение фактического победителя конфликта по текущему файлу, свойству или runtime-значению.
+- Добавлена нормализация путей system, vendor, product, system_ext, odm и `*_dlkm`.
+- Улучшено обнаружение конфликтов файлов, symlink, whiteout и path collisions.
+- Улучшен анализ `.replace` и перекрытия дерева другого модуля.
+- Добавлено сканирование локального и глобального `overlay.d`.
+- Улучшен анализ `system.prop` с учётом значений свойств.
+- Добавлен анализ `service.sh`, `post-fs-data.sh`, `boot-completed.sh` и `action.sh`.
+- Добавлено обнаружение конфликтующих команд settings, device_config, sysctl, sysfs, mount, chmod, chown и resetprop.
+- Добавлена база известных несовместимых пар модулей.
+- Добавлены снимки состояния модулей и их сравнение.
+- Добавлен режим глубокого сканирования `mcd-ctrl scan --deep`.
+- Добавлен вывод только критических конфликтов `mcd-ctrl report --critical-only`.
+- Добавлены `mcd-ctrl boot-status`, boot-scan status и отдельный журнал автозапуска.
+- Исправлено автоматическое сканирование после загрузки на APatch/FolkPatch.
+- Добавлен `boot-completed.sh` для APatch и KernelSU.
+- Добавлена защита от двойного запуска, привязка к boot ID и восстановление после устаревшего scan lock.
+- Улучшены команды doctor, config, whitelist и clear.
+- Улучшены текстовые и JSON-отчёты.
+- Добавлены данные об устройстве, Android, ABI, ядре и SELinux.
+- Добавлено компактное меню, адаптированное под экран смартфона.
+- Сообщения неизвестных команд переведены на русский язык.
+- Проверена работа на APatch/FolkPatch.
+- Совместимость: Magisk, KernelSU, APatch и поддерживаемые форки.
