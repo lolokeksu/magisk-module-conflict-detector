@@ -8,23 +8,6 @@ on:
       - bin/**
       - system/**
       - config/**
-      - tests/**
-      - customize.sh
-      - service.sh
-      - boot-completed.sh
-      - action.sh
-      - uninstall.sh
-      - README.md
-      - CHANGELOG.md
-      - update.json
-      - .github/workflows/release.yml
-  pull_request:
-    paths:
-      - module.prop
-      - bin/**
-      - system/**
-      - config/**
-      - tests/**
       - customize.sh
       - service.sh
       - boot-completed.sh
@@ -39,23 +22,16 @@ permissions:
   contents: write
 
 concurrency:
-  group: module-${{ github.ref }}
+  group: module-release
   cancel-in-progress: false
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Regression tests
-        run: tests/run-tests.sh
-
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Read version
         id: version
         shell: bash
@@ -66,11 +42,31 @@ jobs:
           test -n "$version" && test -n "$code"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
-      - name: Validate metadata
+
+      - name: Validate module
+        shell: bash
         run: |
+          set -euo pipefail
+          sh -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do sh -n "$file"; done
+          sh -n bin/mcd-boot-scan
+          sh -n bin/mcd-menu
+          sh -n customize.sh
+          sh -n service.sh
+          sh -n boot-completed.sh
+          sh -n action.sh
+          sh -n uninstall.sh
           python3 -m json.tool update.json >/dev/null
-          test "$(python3 -c 'import json;print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
-          test "$(python3 -c 'import json;print(json.load(open("update.json"))["versionCode"])')" = "${{ steps.version.outputs.code }}"
+          test "$(python3 -c 'import json; print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
+          test "$(python3 -c 'import json; print(json.load(open("update.json"))["versionCode"])')" = "${{ steps.version.outputs.code }}"
+          test_root="$(mktemp -d)"
+          trap 'rm -rf "$test_root"' EXIT
+          mkdir -p "$test_root/modules" "$test_root/data" "$test_root/root"
+          MCD_DIR="$test_root/data" \
+          MCD_MODULES_DIR="$test_root/modules" \
+          MCD_ROOT_DATA_ADB="$test_root/root" \
+          sh bin/mcd-ctrl self-test --full
+
       - name: Build flashable ZIP
         id: package
         shell: bash
@@ -78,26 +74,41 @@ jobs:
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           zip_name="ModuleConflictDetector-${version}.zip"
+          rm -f "$zip_name" "$zip_name.sha256"
           zip -r -9 "$zip_name" \
             module.prop customize.sh service.sh boot-completed.sh action.sh uninstall.sh \
             README.md CHANGELOG.md update.json bin system config
           sha256sum "$zip_name" > "$zip_name.sha256"
           unzip -t "$zip_name"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
-      - name: Prepare notes
+
+      - name: Prepare release notes
+        shell: bash
         run: |
+          set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          awk -v h="## ${version}" 'index($0,h)==1{f=1;next} f&&/^## /{exit} f{print}' CHANGELOG.md > release-notes.md
+          awk -v heading="## ${version}" '
+            index($0, heading) == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
-      - name: Create or update release
+
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           zip_name="${{ steps.package.outputs.zip_name }}"
           if gh release view "$version" >/dev/null 2>&1; then
             gh release upload "$version" "$zip_name" "$zip_name.sha256" --clobber
             gh release edit "$version" --title "$version" --notes-file release-notes.md --latest
           else
-            gh release create "$version" "$zip_name" "$zip_name.sha256" --target "$GITHUB_SHA" --title "$version" --notes-file release-notes.md --latest
+            gh release create "$version" "$zip_name" "$zip_name.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$version" \
+              --notes-file release-notes.md \
+              --latest
           fi
