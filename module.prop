@@ -1,7 +1,7 @@
 id=ModuleConflictDetector
 name=Module Conflict Detector
-version=v1.3
-versionCode=130
+version=v1.4
+versionCode=140
 author=ExchNow (by Lolokeksu)
-description=Detects file/hash, .replace, overlay.d, system.prop and runtime-script conflicts across Magisk, KernelSU-family and APatch module systems; includes robust root-manager detection, reliable cross-manager boot scanning, live winner checks, JSON reports and snapshots. CLI: mcd-ctrl
+description=Evidence-based conflict analysis for Magisk, KernelSU-family and APatch modules with an interactive RU/EN CLI, mountinfo winner detection, stable finding IDs, history, diff, support bundles, hash cache and JSON schema v2. CLI: mcd-ctrl
 updateJson=https://raw.githubusercontent.com/lolokeksu/magisk-module-conflict-detector/main/update.json

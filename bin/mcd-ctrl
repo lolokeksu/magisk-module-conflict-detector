@@ -1,40 +1,5 @@
 #!/system/bin/sh
-# Module Conflict Detector v1.3 entry point.
-
-show_mobile_help() {
-    cat <<EOFHELP
-Module Conflict Detector $VERSION
-
-Команды:
-  scan          Проверка
-  report        Отчёт
-  boot-status   Автозапуск
-  doctor        Диагностика
-  snapshot      Снимки
-  whitelist     Исключения
-  config        Настройки
-  clear         Очистка
-  version       Версия
-
-Быстрый запуск:
-  mcd-ctrl scan --deep
-  mcd-ctrl report
-
-Только опасные:
-  mcd-ctrl report --critical-only
-
-JSON-отчёт:
-  mcd-ctrl report --json
-EOFHELP
-}
-
-case "$1" in
-    help|--help|-h|'')
-        VERSION="v1.3"
-        show_mobile_help
-        exit 0
-        ;;
-esac
+# Module Conflict Detector v1.4 entry point.
 
 MCD_LIB_DIR="${MCD_LIB_DIR:-/data/adb/modules/ModuleConflictDetector/bin/lib}"
 if [ ! -d "$MCD_LIB_DIR" ]; then
@@ -48,7 +13,13 @@ for MCD_LIB_PART in \
     20-collection.sh \
     30-path-analysis.sh \
     40-resource-analysis.sh \
-    50-commands.sh; do
+    50-commands.sh \
+    60-runtime-v14.sh \
+    61-evidence-v14.sh \
+    62-parser-v14.sh \
+    63-report-v14.sh \
+    64-commands-v14.sh \
+    65-menu-v14.sh; do
     MCD_LIB_PATH="$MCD_LIB_DIR/$MCD_LIB_PART"
     if [ ! -r "$MCD_LIB_PATH" ]; then
         echo "! Missing Module Conflict Detector library: $MCD_LIB_PATH" >&2
@@ -58,8 +29,22 @@ for MCD_LIB_PART in \
 done
 
 case "$1" in
-    scan) do_scan "$@" ;;
+    '')
+        if [ "$(get_config interactive 1)" = "1" ] && { [ -t 0 ] 2>/dev/null || tty -s 2>/dev/null; }; then
+            do_interactive
+        else
+            show_help
+        fi
+        ;;
+    menu) do_interactive ;;
+    scan) SCAN_STARTED_EPOCH=$(date +%s 2>/dev/null); do_scan "$@" ;;
     report) do_report "$@" ;;
+    summary) do_summary ;;
+    explain) do_explain "$@" ;;
+    history) do_history "$@" ;;
+    diff) do_diff "$@" ;;
+    support-bundle) do_support_bundle ;;
+    cache) do_cache "$@" ;;
     snapshot) do_snapshot "$@" ;;
     clear) do_clear "$@" ;;
     whitelist) do_whitelist "$@" ;;
@@ -67,10 +52,16 @@ case "$1" in
     doctor) do_doctor ;;
     boot-status) do_boot_status ;;
     version|--version|-v) echo "Module Conflict Detector $VERSION ($VERSION_CODE)" ;;
+    help-all) show_help_all ;;
+    help|--help|-h) show_help ;;
     *)
-        echo "! Неизвестная команда: $1"
+        if [ "$(lang_get)" = "ru" ]; then
+            echo "! Неизвестная команда: $1"
+        else
+            echo "! Unknown command: $1"
+        fi
         echo
-        show_mobile_help
+        show_help
         exit 1
         ;;
 esac

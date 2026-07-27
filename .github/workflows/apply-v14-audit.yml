@@ -1,0 +1,90 @@
+name: Apply v1.4 audit fixes
+
+on:
+  push:
+    branches:
+      - agent/v1.4-evidence-interactive
+    paths:
+      - .github/workflows/apply-v14-audit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.4-evidence-interactive
+          fetch-depth: 0
+
+      - name: Restore audited source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .audit-upload/part-* | base64 -d > /tmp/mcd-v14-audit.tar.gz
+          echo "ec9a97bd91f73638d7289e0ec64b783ede0f7a1a64cddd62acd7d416876aec15  /tmp/mcd-v14-audit.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/mcd-v14-audit.tar.gz -C .
+          rm -rf .audit-upload
+          rm -f .github/workflows/apply-v14-audit.yml
+          chmod 0755 bin/mcd-ctrl customize.sh action.sh tests/test-v14-layer.sh
+
+      - name: Validate audited v1.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox
+          sh -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do sh -n "$file"; done
+          for file in customize.sh service.sh boot-completed.sh action.sh uninstall.sh bin/mcd-boot-scan; do sh -n "$file"; done
+          dash -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do dash -n "$file"; done
+          busybox ash -n bin/mcd-ctrl
+          for file in bin/lib/*.sh; do busybox ash -n "$file"; done
+          python -m json.tool update.json >/dev/null
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/release.yml', encoding='utf-8'))
+          PY
+          test "$(sed -n 's/^version=//p' module.prop | head -n1)" = "v1.4"
+          test "$(sed -n 's/^versionCode=//p' module.prop | head -n1)" = "140"
+          grep -q '66-integrity-v14.sh' bin/mcd-ctrl
+          bash tests/test-v14-layer.sh
+
+      - name: Commit clean audited changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden v1.4 after release audit"
+          git push origin HEAD:agent/v1.4-evidence-interactive
+
+      - name: Build audited validation ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_name="ModuleConflictDetector-v1.4.zip"
+          checksum="ModuleConflictDetector-v1.4.sha256"
+          rm -f "$zip_name" "$checksum"
+          zip -r -9 "$zip_name" \
+            module.prop customize.sh service.sh boot-completed.sh action.sh uninstall.sh \
+            README.md CHANGELOG.md update.json bin system config
+          sha256sum "$zip_name" | sed "s|  .*|  $zip_name|" > "$checksum"
+          sha256sum -c "$checksum"
+          unzip -t "$zip_name"
+          test "$(unzip -p "$zip_name" module.prop | sed -n 's/^version=//p')" = "v1.4"
+          test "$(unzip -p "$zip_name" module.prop | sed -n 's/^versionCode=//p')" = "140"
+          unzip -p "$zip_name" bin/mcd-ctrl | grep -q '66-integrity-v14.sh'
+
+      - name: Upload audited candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModuleConflictDetector-v1.4-audited
+          path: |
+            ModuleConflictDetector-v1.4.zip
+            ModuleConflictDetector-v1.4.sha256
+          if-no-files-found: error

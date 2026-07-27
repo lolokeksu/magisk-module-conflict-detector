@@ -1,6 +1,6 @@
 {
-  "version": "v1.3",
-  "versionCode": 130,
-  "zipUrl": "https://raw.githubusercontent.com/lolokeksu/magisk-module-conflict-detector/main/dist/ModuleConflictDetector-v1.3.zip",
+  "version": "v1.4",
+  "versionCode": 140,
+  "zipUrl": "https://raw.githubusercontent.com/lolokeksu/magisk-module-conflict-detector/main/dist/ModuleConflictDetector-v1.4.zip",
   "changelog": "https://raw.githubusercontent.com/lolokeksu/magisk-module-conflict-detector/main/CHANGELOG.md"
 }
