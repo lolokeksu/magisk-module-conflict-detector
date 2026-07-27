@@ -31,6 +31,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Read version
         id: version
@@ -102,12 +104,16 @@ jobs:
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           zip_name="${{ steps.package.outputs.zip_name }}"
+
+          git tag -f "$version" "$GITHUB_SHA"
+          git push origin "refs/tags/$version" --force
+
           if gh release view "$version" >/dev/null 2>&1; then
             gh release upload "$version" "$zip_name" "$zip_name.sha256" --clobber
             gh release edit "$version" --title "$version" --notes-file release-notes.md --latest
           else
             gh release create "$version" "$zip_name" "$zip_name.sha256" \
-              --target "$GITHUB_SHA" \
+              --verify-tag \
               --title "$version" \
               --notes-file release-notes.md \
               --latest
