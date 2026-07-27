@@ -134,7 +134,7 @@ fi
 write_status running 0 "$boot_id"
 log "trigger=$TRIGGER status=started boot_id=$boot_id binary=$MCD_BIN"
 
-"$MCD_BIN" scan --quiet --boot >> "$BOOT_LOG" 2>&1
+"$MCD_BIN" scan --deep --quiet --boot >> "$BOOT_LOG" 2>&1
 rc=$?
 
 if [ "$rc" -eq 0 ]; then

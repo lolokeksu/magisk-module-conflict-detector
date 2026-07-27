@@ -37,9 +37,28 @@ analyze_property_candidates() {
         count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
         case "$count" in ''|*[!0-9]*) count=0 ;; esac
         if [ "$count" -eq 1 ]; then WINNER="$matches"; WINNER_CONF=85; WINNER_METHOD="current_property_value_match"; return; fi
-        if [ "$count" -gt 1 ]; then WINNER=$(lexical_winner "$matches"); WINNER_CONF=60; WINNER_METHOD="current_value_matches_multiple_modules"; return; fi
+        if [ "$count" -gt 1 ]; then
+            WINNER=$(precedence_winner "$matches" 2>/dev/null)
+            if [ -n "$WINNER" ]; then
+                WINNER_CONF=35
+                WINNER_METHOD="current_value_plus_user_priority_heuristic"
+            else
+                WINNER=""
+                WINNER_CONF=0
+                WINNER_METHOD="multiple_current_value_matches_unresolved"
+            fi
+            return
+        fi
     fi
-    WINNER=$(lexical_winner "$owners"); WINNER_CONF=45; WINNER_METHOD="lexical_module_id_heuristic"
+    WINNER=$(precedence_winner "$owners" 2>/dev/null)
+    if [ -n "$WINNER" ]; then
+        WINNER_CONF=35
+        WINNER_METHOD="user_enabled_priority_heuristic"
+    else
+        WINNER=""
+        WINNER_CONF=0
+        WINNER_METHOD="unresolved"
+    fi
 }
 
 process_property_conflicts() {
@@ -130,26 +149,117 @@ process_script_conflicts() {
     done < "$SCRIPT_GROUP_FILE"
 }
 
+
+build_sepolicy_groups() {
+    : > "$SEPOLICY_GROUP_FILE"
+    [ -s "$SEPOLICY_FILE" ] || return
+    awk -F '\t' 'BEGIN{OFS="\t"}
+        function flush(){if(key!=""&&count>1)print key,owners}
+        {
+            if(NR==1||$1!=key){flush();key=$1;owners=$2;seen=" "$2" ";count=1}
+            else if(index(seen," "$2" ")==0){owners=owners" "$2;seen=seen$2" ";count++}
+        }
+        END{flush()}
+    ' "$SEPOLICY_FILE" > "$SEPOLICY_GROUP_FILE"
+}
+
+process_sepolicy_conflicts() {
+    build_sepolicy_groups
+    [ -s "$SEPOLICY_GROUP_FILE" ] || return
+    while IFS="$(printf '\t')" read -r key owners; do
+        [ -n "$key" ] || continue
+        candidate="$TMP_DIR/sepolicy.candidate"
+        awk -F '\t' -v k="$key" '$1==k {print}' "$SEPOLICY_FILE" > "$candidate"
+        actions=$(cut -f3 "$candidate" | sort -u | tr '\n' ' ' | sed 's/ $//')
+        rules=$(cut -f4 "$candidate" | sort -u | tr '\n' '|' | sed 's/|$//')
+        evidence=""
+        while IFS="$(printf '\t')" read -r _ module action rule source; do
+            item="{\"module\":\"$(json_escape "$module")\",\"action\":\"$(json_escape "$action")\",\"rule\":\"$(json_escape "$rule")\",\"source\":\"$(json_escape "$source")\"}"
+            [ -n "$evidence" ] && evidence="$evidence,$item" || evidence="$item"
+        done < "$candidate"
+        evidence="[$evidence]"
+        case " $actions " in
+            *' allow '* ) has_allow=1 ;; *) has_allow=0 ;; esac
+        case " $actions " in
+            *' deny '* ) has_deny=1 ;; *) has_deny=0 ;; esac
+        case " $actions " in
+            *' auditallow '* ) has_auditallow=1 ;; *) has_auditallow=0 ;; esac
+        case " $actions " in
+            *' dontaudit '* ) has_dontaudit=1 ;; *) has_dontaudit=0 ;; esac
+
+        if [ "$has_allow" = "1" ] && [ "$has_deny" = "1" ]; then
+            add_finding "sepolicy_rule_conflict" "sepolicy:${key#simple:}" "HIGH" "$owners" "" 0 "runtime_order_unresolved" "opposing allow/deny rules: $rules" "$evidence" 1
+        elif [ "$has_auditallow" = "1" ] && [ "$has_dontaudit" = "1" ]; then
+            add_finding "sepolicy_audit_conflict" "sepolicy:${key#simple:}" "MEDIUM" "$owners" "" 0 "runtime_order_unresolved" "opposing auditallow/dontaudit rules: $rules" "$evidence" 1
+        else
+            add_finding "sepolicy_duplicate_rule" "sepolicy:${key#raw:}" "INFO" "$owners" "" 0 "merged_policy_duplicate" "the same normalized static sepolicy rule is present in multiple modules" "$evidence" 0
+        fi
+    done < "$SEPOLICY_GROUP_FILE"
+}
+
 module_is_active() {
     id="$1"
     awk -F '\t' -v id="$id" '$1==id {found=1} END{exit found?0:1}' "$MODULE_FILE"
 }
 
+module_version() {
+    id="$1"
+    awk -F '\t' -v id="$id" '$1==id {print $3; exit}' "$MODULE_FILE"
+}
+
+version_compare() {
+    a="$1"; b="$2"
+    awk -v a="$a" -v b="$b" 'BEGIN {
+        na=split(a,A,/[^0-9]+/); nb=split(b,B,/[^0-9]+/); n=na>nb?na:nb
+        for(i=1;i<=n;i++){x=A[i]+0;y=B[i]+0;if(x<y){print -1;exit}if(x>y){print 1;exit}}
+        print 0
+    }'
+}
+
+version_allowed() {
+    value="$1"; min="$2"; max="$3"
+    [ -z "$min" ] || [ "$min" = "*" ] || [ "$(version_compare "$value" "$min")" -ge 0 ] || return 1
+    [ -z "$max" ] || [ "$max" = "*" ] || [ "$(version_compare "$value" "$max")" -le 0 ] || return 1
+    return 0
+}
+
+known_rule_matches_environment() {
+    family="$1"; sdk_min="$2"; sdk_max="$3"
+    detect_root_manager_info
+    [ -z "$family" ] || [ "$family" = "*" ] || [ "$family" = "$ROOT_MANAGER_FAMILY" ] || return 1
+    sdk=$(device_value ro.build.version.sdk 0)
+    case "$sdk" in ''|*[!0-9]*) sdk=0 ;; esac
+    [ -z "$sdk_min" ] || [ "$sdk_min" = "*" ] || [ "$sdk" -ge "$sdk_min" ] || return 1
+    [ -z "$sdk_max" ] || [ "$sdk_max" = "*" ] || [ "$sdk" -le "$sdk_max" ] || return 1
+    return 0
+}
+
 process_known_conflicts() {
     is_enabled known_conflicts 1 || return
-    [ -s "$KNOWN_FILE" ] || return
-    while IFS='|' read -r a b severity reason; do
-        case "$a" in ''|'#'*) continue ;; esac
-        [ -n "$b" ] || continue
-        case "$severity" in CRITICAL|HIGH|MEDIUM|LOW) ;; *) severity=MEDIUM ;; esac
-        module_is_active "$a" || continue
-        module_is_active "$b" || continue
-        key="known:$a+$b"
-        in_whitelist "$key" && continue
-        er=$(json_escape "$reason")
-        evidence="[{\"module_a\":\"$(json_escape "$a")\",\"module_b\":\"$(json_escape "$b")\",\"reason\":\"$er\"}]"
-        add_finding "known_module_pair" "$key" "$severity" "$a $b" "" 0 "database_rule" "$reason" "$evidence" 1
-    done < "$KNOWN_FILE"
+    for database in "$KNOWN_BUILTIN_FILE" "$KNOWN_LOCAL_FILE"; do
+        [ -s "$database" ] || continue
+        while IFS="$(printf '\t')" read -r rule_id a b min_a max_a min_b max_b family sdk_min sdk_max severity category reason source added; do
+            case "$rule_id" in ''|'#'*) continue ;; esac
+            case "$rule_id" in *'|'*)
+                old="$rule_id"
+                a=$(printf '%s' "$old" | cut -d'|' -f1); b=$(printf '%s' "$old" | cut -d'|' -f2)
+                severity=$(printf '%s' "$old" | cut -d'|' -f3); reason=$(printf '%s' "$old" | cut -d'|' -f4-)
+                rule_id="LEGACY-$(hash_text "$a|$b" | cut -c1-8)"; min_a='*'; max_a='*'; min_b='*'; max_b='*'; family='*'; sdk_min='*'; sdk_max='*'; category='legacy'; source='legacy'; added='unknown'
+                ;;
+            esac
+            [ -n "$a" ] && [ -n "$b" ] || continue
+            case "$severity" in CRITICAL|HIGH|MEDIUM|LOW) ;; *) severity=MEDIUM ;; esac
+            module_is_active "$a" || continue; module_is_active "$b" || continue
+            va=$(module_version "$a"); vb=$(module_version "$b")
+            version_allowed "$va" "$min_a" "$max_a" || continue
+            version_allowed "$vb" "$min_b" "$max_b" || continue
+            known_rule_matches_environment "$family" "$sdk_min" "$sdk_max" || continue
+            key="known:$a+$b"
+            in_whitelist "$key" && continue
+            evidence="[{\"rule_id\":\"$(json_escape "$rule_id")\",\"database\":\"$(json_escape "$database")\",\"module_a\":\"$(json_escape "$a")\",\"module_b\":\"$(json_escape "$b")\",\"version_a\":\"$(json_escape "$va")\",\"version_b\":\"$(json_escape "$vb")\",\"category\":\"$(json_escape "$category")\",\"source\":\"$(json_escape "$source")\",\"added\":\"$(json_escape "$added")\"}]"
+            add_finding "known_module_pair" "$key" "$severity" "$a $b" "" 100 "database_rule:$rule_id" "$reason" "$evidence" 1 "database=$database|rule_id=$rule_id"
+        done < "$database"
+    done
 }
 
 process_global_overlayd() {
@@ -168,6 +278,7 @@ write_json_report() {
     replace_count="$4"
     prop_count="$5"
     script_count="$6"
+    sepolicy_count="$7"
 
     findings=$(awk 'BEGIN{first=1}{if(!first)printf ",";printf "%s",$0;first=0}' "$JSON_ITEMS_FILE" 2>/dev/null)
     android=$(device_value ro.build.version.release unknown)
@@ -179,6 +290,12 @@ write_json_report() {
     selinux=$(getenforce 2>/dev/null); [ -n "$selinux" ] || selinux=unknown
     detect_root_manager_info
     manager="$ROOT_MANAGER"
+    active_count=$(awk -F '	' '$4=="active"||$4=="active_skip_mount"{n++}END{print n+0}' "$MODULE_STATUS_FILE" 2>/dev/null)
+    disabled_count=$(awk -F '	' '$4=="disabled"{n++}END{print n+0}' "$MODULE_STATUS_FILE" 2>/dev/null)
+    remove_count=$(awk -F '	' '$4=="remove_pending"{n++}END{print n+0}' "$MODULE_STATUS_FILE" 2>/dev/null)
+    skip_count=$(awk -F '	' '$4=="active_skip_mount"{n++}END{print n+0}' "$MODULE_STATUS_FILE" 2>/dev/null)
+    known_db_version=$(sed -n 's/^# database_version=//p' "$KNOWN_BUILTIN_FILE" 2>/dev/null | head -n 1)
+    case "$known_db_version" in ''|*[!0-9]*) known_db_version=1 ;; esac
 
     cat > "$JSON_FILE" <<EOFJSON
 {
@@ -188,6 +305,8 @@ write_json_report() {
   "scan_time": "$(json_escape "$scan_time")",
   "boot_scan": $([ "$BOOT_MODE" = "1" ] && echo true || echo false),
   "deep_scan": $([ "$DEEP_MODE" = "1" ] && echo true || echo false),
+  "scan_profile": "$SCAN_PROFILE",
+  "known_database_version": $known_db_version,
   "device": {
     "model": "$(json_escape "$model")",
     "android": "$(json_escape "$android")",
@@ -204,10 +323,15 @@ write_json_report() {
   },
   "summary": {
     "modules_scanned": $module_count,
+    "modules_active": $active_count,
+    "modules_disabled": $disabled_count,
+    "modules_remove_pending": $remove_count,
+    "modules_skip_mount": $skip_count,
     "mounted_entries_scanned": $entry_count,
     "replace_dirs_scanned": $replace_count,
     "property_definitions_scanned": $prop_count,
     "script_events_scanned": $script_count,
+    "sepolicy_rules_scanned": $sepolicy_count,
     "findings_count": $(count_get "$COUNT_FINDINGS_FILE"),
     "conflicts_count": $(count_get "$COUNT_CONFLICTS_FILE"),
     "critical": $(count_get "$COUNT_CRITICAL_FILE"),
@@ -221,10 +345,17 @@ write_json_report() {
 EOFJSON
     cp -f "$JSON_FILE" "$REPORTS_DIR/report-latest.json" 2>/dev/null
     cp -f "$LOG_FILE" "$REPORTS_DIR/conflicts-latest.log" 2>/dev/null
+    cp -f "$MODULE_STATUS_FILE" "$MODULE_STATUS_REPORT" 2>/dev/null
+    cp -f "$FINDINGS_INDEX_FILE" "$REPORTS_DIR/findings-latest.tsv" 2>/dev/null
+    build_manifest "$SCAN_MANIFEST_FILE" 2>/dev/null
 }
 
 report_critical_only() {
-    [ -s "$LOG_FILE" ] || { echo "- No text report. Run: mcd-ctrl scan"; return; }
+    [ -s "$LOG_FILE" ] || { echo "- Отчёт отсутствует. Запустите: mcd-ctrl scan --deep"; return; }
+    if ! grep -q '^\[CRITICAL\]' "$LOG_FILE" 2>/dev/null; then
+        echo "- Критические конфликты не обнаружены."
+        return
+    fi
     awk '
         /^\[CRITICAL\]/ {show=1}
         /^\[[A-Z]+\]/ && !/^\[CRITICAL\]/ {show=0}

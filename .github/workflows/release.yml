@@ -1,9 +1,8 @@
-name: Build and publish module release
+name: Test, build and publish module
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - module.prop
       - bin/**
@@ -33,17 +32,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read module version
+      - name: Read version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version=//p' module.prop | head -n 1)"
-          version_code="$(sed -n 's/^versionCode=//p' module.prop | head -n 1)"
-          test -n "$version"
-          test -n "$version_code"
+          version="$(sed -n 's/^version=//p' module.prop | head -n1)"
+          code="$(sed -n 's/^versionCode=//p' module.prop | head -n1)"
+          test -n "$version" && test -n "$code"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Validate module
         shell: bash
@@ -52,14 +50,22 @@ jobs:
           sh -n bin/mcd-ctrl
           for file in bin/lib/*.sh; do sh -n "$file"; done
           sh -n bin/mcd-boot-scan
+          sh -n bin/mcd-menu
           sh -n customize.sh
           sh -n service.sh
           sh -n boot-completed.sh
           sh -n action.sh
           sh -n uninstall.sh
-          python -m json.tool update.json >/dev/null
-          test "$(sed -n 's/^version=//p' module.prop | head -n 1)" = "${{ steps.version.outputs.version }}"
-          test "$(python -c 'import json; print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
+          python3 -m json.tool update.json >/dev/null
+          test "$(python3 -c 'import json; print(json.load(open("update.json"))["version"])')" = "${{ steps.version.outputs.version }}"
+          test "$(python3 -c 'import json; print(json.load(open("update.json"))["versionCode"])')" = "${{ steps.version.outputs.code }}"
+          test_root="$(mktemp -d)"
+          trap 'rm -rf "$test_root"' EXIT
+          mkdir -p "$test_root/modules" "$test_root/data" "$test_root/root"
+          MCD_DIR="$test_root/data" \
+          MCD_MODULES_DIR="$test_root/modules" \
+          MCD_ROOT_DATA_ADB="$test_root/root" \
+          sh bin/mcd-ctrl self-test --full
 
       - name: Build flashable ZIP
         id: package
@@ -70,18 +76,8 @@ jobs:
           zip_name="ModuleConflictDetector-${version}.zip"
           rm -f "$zip_name" "$zip_name.sha256"
           zip -r -9 "$zip_name" \
-            module.prop \
-            customize.sh \
-            service.sh \
-            boot-completed.sh \
-            action.sh \
-            uninstall.sh \
-            README.md \
-            CHANGELOG.md \
-            update.json \
-            bin \
-            system \
-            config
+            module.prop customize.sh service.sh boot-completed.sh action.sh uninstall.sh \
+            README.md CHANGELOG.md update.json bin system config
           sha256sum "$zip_name" > "$zip_name.sha256"
           unzip -t "$zip_name"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"

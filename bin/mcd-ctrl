@@ -1,41 +1,8 @@
 #!/system/bin/sh
-# Module Conflict Detector v1.3 entry point.
+# Module Conflict Detector v1.4 entry point.
 
-show_mobile_help() {
-    cat <<EOFHELP
-Module Conflict Detector $VERSION
-
-Команды:
-  scan          Проверка
-  report        Отчёт
-  boot-status   Автозапуск
-  doctor        Диагностика
-  snapshot      Снимки
-  whitelist     Исключения
-  config        Настройки
-  clear         Очистка
-  version       Версия
-
-Быстрый запуск:
-  mcd-ctrl scan --deep
-  mcd-ctrl report
-
-Только опасные:
-  mcd-ctrl report --critical-only
-
-JSON-отчёт:
-  mcd-ctrl report --json
-EOFHELP
-}
-
-case "$1" in
-    help|--help|-h|'')
-        VERSION="v1.3"
-        show_mobile_help
-        exit 0
-        ;;
-esac
-
+MCD_SELF_BIN="$0"
+export MCD_SELF_BIN
 MCD_LIB_DIR="${MCD_LIB_DIR:-/data/adb/modules/ModuleConflictDetector/bin/lib}"
 if [ ! -d "$MCD_LIB_DIR" ]; then
     MCD_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
@@ -51,7 +18,7 @@ for MCD_LIB_PART in \
     50-commands.sh; do
     MCD_LIB_PATH="$MCD_LIB_DIR/$MCD_LIB_PART"
     if [ ! -r "$MCD_LIB_PATH" ]; then
-        echo "! Missing Module Conflict Detector library: $MCD_LIB_PATH" >&2
+        echo "! Missing library: $MCD_LIB_PATH" >&2
         exit 127
     fi
     . "$MCD_LIB_PATH"
@@ -60,17 +27,28 @@ done
 case "$1" in
     scan) do_scan "$@" ;;
     report) do_report "$@" ;;
+    explain) do_explain "$@" ;;
+    baseline) do_baseline "$@" ;;
+    export) do_export "$@" ;;
+    self-test) do_self_test "$@" ;;
     snapshot) do_snapshot "$@" ;;
     clear) do_clear "$@" ;;
     whitelist) do_whitelist "$@" ;;
     config) do_config "$@" ;;
     doctor) do_doctor ;;
     boot-status) do_boot_status ;;
-    version|--version|-v) echo "Module Conflict Detector $VERSION ($VERSION_CODE)" ;;
-    *)
-        echo "! Неизвестная команда: $1"
-        echo
-        show_mobile_help
-        exit 1
+    menu)
+        MCD_MENU="${MCD_LIB_DIR%/lib}/mcd-menu"
+        [ -x "$MCD_MENU" ] || { echo "! Меню не найдено: $MCD_MENU"; exit 127; }
+        exec sh "$MCD_MENU"
         ;;
+    help-all) show_help_all ;;
+    help|--help|-h) show_help ;;
+    '')
+        MCD_MENU="${MCD_LIB_DIR%/lib}/mcd-menu"
+        [ -x "$MCD_MENU" ] || { echo "! Меню не найдено: $MCD_MENU"; exit 127; }
+        exec sh "$MCD_MENU"
+        ;;
+    version|--version|-v) echo "Module Conflict Detector $VERSION ($VERSION_CODE)" ;;
+    *) echo "! Неизвестная команда: $1"; echo; show_help; exit 1 ;;
 esac

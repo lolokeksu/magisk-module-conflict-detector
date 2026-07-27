@@ -58,28 +58,56 @@ add_finding() {
     detail="$8"
     evidence_json="$9"
     is_conflict="${10}"
+    identity_key="${11-}"
 
     [ -n "$evidence_json" ] || evidence_json="[]"
-    modules_json=$(owners_to_json "$owners")
-    et=$(json_escape "$type")
-    ep=$(json_escape "$target")
-    es=$(json_escape "$severity")
-    ew=$(json_escape "$winner")
-    em=$(json_escape "$method")
-    ed=$(json_escape "$detail")
     case "$confidence" in ''|*[!0-9]*) confidence=0 ;; esac
     [ "$is_conflict" = "1" ] && conflict_json=true || conflict_json=false
 
+    finding_id=$(finding_id_for "$type" "$target" "$owners" "$identity_key")
+    if finding_id_exists "$finding_id"; then
+        collision_key="$identity_key|$winner|$method|$detail|$evidence_json"
+        finding_id=$(finding_id_for "$type" "$target" "$owners" "$collision_key")
+        collision_index=2
+        while finding_id_exists "$finding_id"; do
+            finding_id=$(finding_id_for "$type" "$target" "$owners" "$collision_key|$collision_index")
+            collision_index=$((collision_index + 1))
+        done
+    fi
+    actionability=$(finding_actionability "$severity" "$is_conflict")
+    reason_codes=$(finding_reason_codes "$type" "$severity" "$method" "$target")
+    recommendation=$(finding_recommendation "$type" "$severity" "$is_conflict" "$method")
+    impact=$(finding_impact "$type" "$target" "$severity")
+    finding_confidence="$confidence"
+    [ "$is_conflict" = "0" ] && finding_confidence=100
+
+    modules_json=$(owners_to_json "$owners")
+    et=$(json_escape "$type"); ep=$(json_escape "$target"); es=$(json_escape "$severity")
+    ei=$(json_escape "$finding_id"); ew=$(json_escape "$winner"); em=$(json_escape "$method")
+    ed=$(json_escape "$detail"); ea=$(json_escape "$actionability"); er=$(json_escape "$reason_codes")
+    erec=$(json_escape "$recommendation"); eimp=$(json_escape "$impact")
+    reason_json=$(csv_to_json_array "$reason_codes")
+
     {
-        printf '[%s][%s] %s\n' "$severity" "$type" "$target"
+        printf '[%s][%s][%s]\n' "$severity" "$finding_id" "$type"
+        printf '    target: %s\n' "$target"
         printf '    modules: %s\n' "$owners"
-        [ -n "$winner" ] && printf '    effective_or_likely_winner: %s (%s%%, %s)\n' "$winner" "$confidence" "$method"
+        [ -n "$winner" ] && printf '    winner: %s (%s%%, %s)\n' "$winner" "$confidence" "$method"
+        printf '    actionability: %s\n' "$actionability"
+        printf '    reason_codes: %s\n' "$reason_codes"
         [ -n "$detail" ] && printf '    detail: %s\n' "$detail"
-        printf '\n'
+        printf '    impact: %s\n' "$impact"
+        printf '    recommendation: %s\n\n' "$recommendation"
     } >> "$LOG_FILE"
 
-    printf '{"type":"%s","target":"%s","severity":"%s","is_conflict":%s,"modules":[%s],"winner":"%s","winner_confidence":%s,"winner_method":"%s","detail":"%s","evidence":%s}\n' \
-        "$et" "$ep" "$es" "$conflict_json" "$modules_json" "$ew" "$confidence" "$em" "$ed" "$evidence_json" >> "$JSON_ITEMS_FILE"
+    printf '{"id":"%s","type":"%s","target":"%s","severity":"%s","confidence":%s,"actionability":"%s","reason_codes":%s,"is_conflict":%s,"modules":[%s],"winner":"%s","winner_confidence":%s,"winner_method":"%s","detail":"%s","impact":"%s","recommendation":"%s","evidence":%s}\n' \
+        "$ei" "$et" "$ep" "$es" "$finding_confidence" "$ea" "$reason_json" "$conflict_json" "$modules_json" "$ew" "$confidence" "$em" "$ed" "$eimp" "$erec" "$evidence_json" >> "$JSON_ITEMS_FILE"
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$finding_id" "$severity" "$type" "$(safe_field "$target")" "$(safe_field "$owners")" \
+        "$(safe_field "$winner")" "$confidence" "$(safe_field "$method")" "$actionability" \
+        "$(safe_field "$reason_codes")" "$(safe_field "$detail")" "$(safe_field "$impact")" \
+        "$(safe_field "$recommendation")" "$(safe_field "$evidence_json")" >> "$FINDINGS_INDEX_FILE"
 
     count_inc "$COUNT_FINDINGS_FILE"
     [ "$is_conflict" = "1" ] && count_inc "$COUNT_CONFLICTS_FILE"
@@ -171,16 +199,28 @@ analyze_path_candidates() {
             WINNER_METHOD="live_content_match"
             return
         elif [ "$match_count" -gt 1 ]; then
-            WINNER=$(lexical_winner "$matches")
-            WINNER_CONF=70
-            WINNER_METHOD="live_content_matches_multiple_modules"
+            WINNER=$(precedence_winner "$matches" 2>/dev/null)
+            if [ -n "$WINNER" ]; then
+                WINNER_CONF=35
+                WINNER_METHOD="live_content_plus_user_priority_heuristic"
+            else
+                WINNER=""
+                WINNER_CONF=0
+                WINNER_METHOD="multiple_live_matches_unresolved"
+            fi
             return
         fi
     fi
 
-    WINNER=$(lexical_winner "$owners")
-    WINNER_CONF=55
-    WINNER_METHOD="lexical_module_id_heuristic"
+    WINNER=$(precedence_winner "$owners" 2>/dev/null)
+    if [ -n "$WINNER" ]; then
+        WINNER_CONF=35
+        WINNER_METHOD="user_enabled_priority_heuristic"
+    else
+        WINNER=""
+        WINNER_CONF=0
+        WINNER_METHOD="unresolved"
+    fi
 }
 
 process_path_conflicts() {
@@ -235,9 +275,17 @@ process_replace_conflicts() {
         while IFS="$(printf '\t')" read -r path owners; do
             [ -n "$path" ] || continue
             in_whitelist "$path" && continue
-            winner=$(lexical_winner "$owners")
+            winner=$(precedence_winner "$owners" 2>/dev/null)
+            if [ -n "$winner" ]; then
+                winner_conf=35
+                winner_method="user_enabled_priority_heuristic"
+            else
+                winner=""
+                winner_conf=0
+                winner_method="unresolved"
+            fi
             severity=$(severity_of_path "$path")
-            add_finding "replace_dir_collision" "$path" "$severity" "$owners" "$winner" 45 "lexical_module_id_heuristic" "multiple active modules declare .replace for the same directory" "[]" 1
+            add_finding "replace_dir_collision" "$path" "$severity" "$owners" "$winner" "$winner_conf" "$winner_method" "multiple active modules declare .replace for the same directory" "[]" 1
         done < "$REPLACE_GROUP_FILE"
     fi
 
@@ -260,7 +308,7 @@ process_replace_conflicts() {
         owners="$replacer $affected"
         severity=$(severity_of_path "$path")
         detail="replace_owner=$replacer; masked_entries=$count; examples=$examples"
-        add_finding "replace_masks_tree" "$path" "$severity" "$owners" "$replacer" 90 "explicit_replace_owner" "$detail" "[]" 1
+        add_finding "replace_masks_tree" "$path" "$severity" "$owners" "$replacer" 90 "explicit_replace_owner" "$detail" "[]" 1 "replace_owner=$replacer"
     done < "$TMP_DIR/replace-mask-groups.work"
 }
 
